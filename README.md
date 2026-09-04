@@ -1,3 +1,52 @@
+# Ledger402
+
+Autonomous intelligence procurement on XRPL Testnet. The user asks a **business question**; a deterministic workflow decides whether buying premium evidence is worth the cost. Payment is part of the workflow, not the product. Morning MVP supports **one** task type: `port_congestion` (Port X congestion). It is not a general research agent and does not use LangChain/LangGraph.
+
+**Real:** x402, XRPL Testnet settlement, deterministic procurement loop, budget policy, HTTP provider architecture.
+
+**Synthetic:** port data, satellite data, provider identities, commercial pricing. This is **not** a live satellite or vendor integration.
+
+Demo amounts (integer drops internally; XRP for display only). The budget is **data procurement only** and does **not** include the XRPL network fee:
+
+- Data procurement budget: **5000 drops / 0.005 XRP**
+- Premium query: **1200 drops / 0.0012 XRP**
+- Procurement remaining: **3800 drops / 0.0038 XRP**
+
+### Run locally (Python 3.11+)
+
+Do not activate the venv yourself. Make uses `.venv/bin/python` and `.venv/bin/pip`.
+
+```bash
+make install
+cp .env.example .env
+make wallet-setup
+# copy printed XRPL_WALLET_SEED (buyer) and XRPL_PAY_TO (merchant address) into .env
+make dev-start
+```
+
+`make wallet-setup` prints credentials and **does not** write `.env`. Never commit `.env` or the buyer seed.
+
+Local URLs:
+
+- UI: http://localhost:8501
+- Orchestrator: http://localhost:8000
+- Free provider: http://localhost:8001
+- Premium provider: http://localhost:8002
+
+Live Testnet payment check (not part of pytest):
+
+```bash
+make pay-once
+```
+
+`make test` never spends Testnet XRP. Purchase idempotency is **process-local** (`run_id + provider_id` in memory: NOT_STARTED / PENDING / SUCCESS / FAILED / UNKNOWN). Restarting the orchestrator clears it. No database. `UNKNOWN` means the client failed after a transaction may already have been submitted; the same run will not pay again.
+
+Unsupported questions (anything that is not port congestion) are rejected. They will not receive Port X congestion answers.
+
+Morning build plan: [PLAN.md](PLAN.md). Challenge brief continues below.
+
+---
+
 # Ripple — AI-Native Business on XRPL
 
 ## 🚨 SETUP A FEEDBACK HOOK!! 🚨

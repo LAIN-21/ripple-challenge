@@ -1,0 +1,11 @@
+{
+  "provider_id": "public-port-stats",
+  "provider_name": "Public Port Statistics",
+  "port": "Port X",
+  "berth_occupancy": 0.71,
+  "average_wait_hours": 8.4,
+  "vessel_queue": 17,
+  "freshness_hours": 72,
+  "quality_score": 0.62,
+  "synthetic": true
+}

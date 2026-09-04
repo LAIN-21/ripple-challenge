@@ -1,0 +1,28 @@
+[
+  {
+    "id": "public-port-stats",
+    "name": "Public Port Statistics",
+    "category": "port_congestion",
+    "base_url_env": "FREE_PROVIDER_URL",
+    "path": "/intelligence/port-congestion",
+    "payment_required": false,
+    "price_drops": 0,
+    "freshness_hours": 72,
+    "quality_score": 0.62,
+    "expected_information_gain": 0.05,
+    "description": "Stale public berth and queue statistics (synthetic)."
+  },
+  {
+    "id": "satellite-logistics-intel",
+    "name": "Satellite Logistics Intelligence",
+    "category": "port_congestion",
+    "base_url_env": "PREMIUM_PROVIDER_URL",
+    "path": "/intelligence/port-congestion",
+    "payment_required": true,
+    "price_drops": 1200,
+    "freshness_hours": 3,
+    "quality_score": 0.93,
+    "expected_information_gain": 0.35,
+    "description": "Fresh synthetic satellite logistics intelligence."
+  }
+]

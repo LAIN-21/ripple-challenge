@@ -1,0 +1,12 @@
+{
+  "provider_id": "satellite-logistics-intel",
+  "provider_name": "Satellite Logistics Intelligence",
+  "port": "Port X",
+  "container_density_delta": 0.24,
+  "anchored_vessels_delta": 0.31,
+  "yard_utilization": 0.91,
+  "truck_activity_delta": 0.18,
+  "freshness_hours": 3,
+  "quality_score": 0.93,
+  "synthetic": true
+}

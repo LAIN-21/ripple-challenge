@@ -1,0 +1,10 @@
+x402-xrpl==0.3.3
+xrpl-py>=4.1.0
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.31
+python-dotenv>=1,<2
+requests>=2,<3
+httpx>=0.28.1
+pydantic>=2,<3
+streamlit
+pytest
