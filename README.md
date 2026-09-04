@@ -1,3 +1,127 @@
+# Ledger402
+
+Autonomous intelligence procurement on XRPL Testnet. The user asks a **business question**; a deterministic workflow decides whether buying premium evidence is worth the cost. Payment is part of the workflow, not the product. Morning MVP supports **one** task type: `port_congestion` (Port X congestion). It is not a general research agent and does not use LangChain/LangGraph.
+
+**Real:** x402, XRPL Testnet settlement, deterministic procurement loop, budget policy, HTTP provider architecture.
+
+**Synthetic:** port data, satellite data, provider identities, commercial pricing. This is **not** a live satellite or vendor integration.
+
+Demo amounts (integer drops internally; XRP for display only). The budget is **data procurement only** and does **not** include the XRPL network fee:
+
+- Data procurement budget: **5000 drops / 0.005 XRP**
+- Premium query: **1200 drops / 0.0012 XRP**
+- Procurement remaining: **3800 drops / 0.0038 XRP**
+
+## Local setup
+
+### Clone
+
+```bash
+git clone https://github.com/LAIN-21/ripple-challenge.git
+cd ripple-challenge
+git checkout -b your-feature
+```
+
+Work on a new branch. Open a pull request for every change.
+
+### Prerequisites
+
+- **Python 3.11+** (`python3 --version`). `x402-xrpl` will not install on 3.10 or older. On macOS, `python3` is often still 3.9 — install 3.11+ from python.org or `brew install python@3.12`.
+- `make`
+- Internet (Testnet faucet + x402 facilitator)
+- **Node 18+** only if you use Cursor/Claude in this repo (feedback hook)
+
+Do not activate the venv yourself. Make uses `.venv/bin/python` and `.venv/bin/pip`.
+
+### Feedback hook (once per person)
+
+The Cursor hook is already registered in `.cursor/hooks.json`. Each teammate still needs their **own** identity file. Do not copy someone else's `~/.xrpl-feedback-hook.json`.
+
+```bash
+TEAM_NAME="CYBERLEEK" HACKER_NAME="Your Real Name" node hook/setup.mjs --non-interactive
+cat ~/.xrpl-feedback-hook.json
+```
+
+Full details: [hook/INSTALL.md](hook/INSTALL.md).
+
+### First run
+
+```bash
+make install
+cp .env.example .env
+make wallet-setup
+```
+
+`make wallet-setup` funds two XRPL Testnet wallets (buyer + merchant) and **prints** credentials. It does **not** write `.env`. Paste these two lines into `.env`:
+
+```dotenv
+XRPL_WALLET_SEED=<buyer seed from the printout>
+XRPL_PAY_TO=<merchant address from the printout>
+```
+
+Leave every other value from `.env.example` unchanged. Each person funds their own wallets. Never commit `.env`, never share the buyer seed, never reuse another teammate's seed.
+
+Then start all four processes (Ctrl+C stops them together):
+
+```bash
+make dev-start
+```
+
+| What | URL |
+| --- | --- |
+| Streamlit UI | http://localhost:8501 |
+| Orchestrator | http://localhost:8000 |
+| Free provider | http://localhost:8001 |
+| Premium provider | http://localhost:8002 |
+
+Ports `8000`, `8001`, `8002`, and `8501` must be free.
+
+### Demo in the UI
+
+1. Open http://localhost:8501
+2. Leave the default question: `Assess whether Port X is becoming congested.`
+3. Leave budget at **5000** drops
+4. Click **Run Research** (can take up to ~3 minutes; it pays Testnet)
+
+You should see BUY → HTTP 402 → XRPL payment of 1200 drops → premium unlock, confidence **58% → 87%**, remaining budget **3800 drops**, and a Testnet explorer link in the sidebar.
+
+Unsupported questions (anything that is not port congestion) return **400**. They will not receive Port X congestion answers.
+
+### Tests vs live payment
+
+```bash
+make test      # mocked; never spends Testnet XRP
+make pay-once  # one real 1200-drop Testnet payment (needs .env + running premium provider, or run after make dev-start)
+```
+
+Purchase idempotency is **process-local** (`run_id + provider_id` in memory: NOT_STARTED / PENDING / SUCCESS / FAILED / UNKNOWN). Restarting the orchestrator clears it. No database. `UNKNOWN` means the client failed after a transaction may already have been submitted; the same run will not pay again.
+
+### If something fails
+
+| Symptom | What to do |
+| --- | --- |
+| `Python 3.11+ is required` | Use a 3.11+ `python3` (see Prerequisites) |
+| `XRPL wallet configuration missing` | `.env` is missing, or `XRPL_WALLET_SEED` / `XRPL_PAY_TO` are empty. Re-run `make wallet-setup` and paste the two lines |
+| Faucet / wallet-setup error | Testnet faucet flakes. Wait a minute and run `make wallet-setup` again |
+| Port already in use | Stop the old `make dev-start` (Ctrl+C) or kill whatever is on 8000–8002 / 8501 |
+| UI error / 402 after a restart | Confirm `make dev-start` is still running and `.env` still has the seed |
+
+### Remaining work
+
+The morning MVP is a **deterministic procurement loop**, not an agent. Payment, policy, and the Port X demo work; the next job is to make the agent real without breaking the commercial loop.
+
+- **Agentic architecture.** Replace the hardcoded `port_congestion` state machine with an agent that classifies the question, discovers providers, decides whether to buy, reassesses after unlock, and can buy again, branch, retry, or stop. LangGraph (or equivalent) is justified here; do not keep pretending the current workflow is an agent.
+- **More than one task type.** Unsupported questions should be understood and routed, not only rejected with 400.
+- **Multiple premium providers.** Rank options on price vs expected information gain; do not always buy the same satellite feed.
+- **LLM-written research output.** Templated 58% → 87% copy is a placeholder for a real answer grounded in purchased evidence.
+- **RLUSD (optional later).** Cleaner commercial amounts than micro-XRP drops; keep drops as the on-chain unit until then.
+- **Persistence.** Process-local idempotency dies on orchestrator restart; a real run store is needed before multi-step agent loops.
+- **Not next unless we need it for demo:** live satellite APIs, Docker/cloud, ODRL, x402-secure VI, accounts/auth.
+
+Morning build plan (what shipped): [PLAN.md](PLAN.md). Challenge brief continues below.
+
+---
+
 # Ripple — AI-Native Business on XRPL
 
 ## 🚨 SETUP A FEEDBACK HOOK!! 🚨
