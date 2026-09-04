@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any
+from typing import Any, Mapping
 
 import requests
 from xrpl.wallet import Wallet
@@ -23,8 +23,16 @@ PENDING = "PENDING"
 SUCCESS = "SUCCESS"
 FAILED = "FAILED"
 UNKNOWN = "UNKNOWN"
+REQUIREMENT_REJECTED = "REQUIREMENT_REJECTED"
+CONFIG_ERROR = "CONFIG_ERROR"
 
 EXPLORER_TX = "https://testnet.xrpl.org/transactions/{hash}"
+EXPECTED_ASSET = "XRP"
+EXPECTED_SCHEME = "exact"
+
+
+class PaymentRequirementRejected(Exception):
+    """Pre-sign rejection: no matching 402 requirement, nothing submitted."""
 
 
 @dataclass
@@ -36,6 +44,7 @@ class PurchaseRecord:
     body: Any = None
     error: str | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
+    settlement: dict[str, Any] | None = None
 
 
 _cache: dict[str, PurchaseRecord] = {}
@@ -104,17 +113,138 @@ def observe_unpaid_402(url: str, timeout: float = 30.0) -> requests.Response:
     return response
 
 
-def _buyer_session() -> requests.Session:
+def _req_field(req: Mapping[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in req and req[name] is not None:
+            return req[name]
+    return None
+
+
+def _amount_drops(req: Mapping[str, Any]) -> int | None:
+    raw = _req_field(req, "amount", "maxAmountRequired")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def requirement_matches(
+    req: Mapping[str, Any],
+    *,
+    expected_drops: int,
+    remaining_budget_drops: int,
+    expected_pay_to: str,
+    expected_asset: str = EXPECTED_ASSET,
+    expected_network: str = "xrpl:1",
+    expected_scheme: str = EXPECTED_SCHEME,
+) -> bool:
+    """Compare an untrusted 402 requirement against trusted expected terms."""
+    amount = _amount_drops(req)
+    if amount is None:
+        return False
+    if amount != int(expected_drops):
+        return False
+    if amount > int(remaining_budget_drops):
+        return False
+    asset = str(_req_field(req, "asset", "currency") or "")
+    if asset != expected_asset:
+        return False
+    pay_to = str(_req_field(req, "payTo", "pay_to") or "")
+    if pay_to != expected_pay_to:
+        return False
+    network = str(_req_field(req, "network") or "")
+    if network != expected_network:
+        return False
+    scheme = str(_req_field(req, "scheme") or "")
+    if scheme != expected_scheme:
+        return False
+    return True
+
+
+def select_payment_requirement(
+    accepts: Any,
+    network_filter: str | None = None,
+    scheme_filter: str | None = None,
+    max_value: Any = None,
+    *,
+    expected_drops: int,
+    remaining_budget_drops: int,
+    expected_pay_to: str,
+    expected_network: str,
+) -> Mapping[str, Any]:
+    del network_filter, scheme_filter, max_value
+    for req in accepts or []:
+        if isinstance(req, Mapping) and requirement_matches(
+            req,
+            expected_drops=expected_drops,
+            remaining_budget_drops=remaining_budget_drops,
+            expected_pay_to=expected_pay_to,
+            expected_network=expected_network,
+        ):
+            return req
+    raise PaymentRequirementRejected(
+        "No 402 payment requirement matched expected provider terms "
+        f"(amount={expected_drops} drops, asset={EXPECTED_ASSET}, "
+        f"payTo={expected_pay_to}, network={expected_network}, scheme={EXPECTED_SCHEME})."
+    )
+
+
+def _buyer_session(
+    *,
+    expected_drops: int,
+    remaining_budget_drops: int,
+    selector_state: dict[str, Any],
+) -> requests.Session:
     seed = os.environ["XRPL_WALLET_SEED"]
     rpc = os.getenv("XRPL_RPC_URL", "https://s.altnet.rippletest.net:51234/")
     network = os.getenv("XRPL_NETWORK", "xrpl:1")
+    pay_to = os.environ["XRPL_PAY_TO"]
     buyer = Wallet.from_seed(seed)
+
+    def selector(
+        accepts: Any,
+        network_filter: str | None = None,
+        scheme_filter: str | None = None,
+        max_value: Any = None,
+    ) -> Mapping[str, Any]:
+        try:
+            return select_payment_requirement(
+                accepts,
+                network_filter,
+                scheme_filter,
+                max_value,
+                expected_drops=expected_drops,
+                remaining_budget_drops=remaining_budget_drops,
+                expected_pay_to=pay_to,
+                expected_network=network,
+            )
+        except PaymentRequirementRejected as exc:
+            selector_state["rejected"] = exc
+            raise
+
     return x402_requests(
         buyer,
         rpc_url=rpc,
         network_filter=network,
-        scheme_filter="exact",
+        scheme_filter=EXPECTED_SCHEME,
+        payment_requirements_selector=selector,
     )
+
+
+def _decode_payment_header(response: requests.Response) -> dict[str, Any] | None:
+    header = _header(response, "PAYMENT-RESPONSE")
+    if not header:
+        return None
+    try:
+        decoded = decode_payment_response(header)
+    except Exception:
+        try:
+            decoded = json.loads(header)
+        except Exception:
+            return None
+    return decoded if isinstance(decoded, dict) else None
 
 
 def purchase_premium(
@@ -122,6 +252,8 @@ def purchase_premium(
     url: str,
     run_id: str,
     provider_id: str,
+    expected_drops: int,
+    remaining_budget_drops: int,
     log: list[dict[str, Any]] | None = None,
     timeout: float = 180.0,
 ) -> PurchaseRecord:
@@ -131,10 +263,18 @@ def purchase_premium(
         existing = _cache.get(cache_key)
         if existing and existing.state in {PENDING, SUCCESS, UNKNOWN}:
             return existing
+
+    require_wallet_env()
+
+    with _lock:
+        existing = _cache.get(cache_key)
+        if existing and existing.state in {PENDING, SUCCESS, UNKNOWN}:
+            return existing
         record = PurchaseRecord(state=PENDING)
         _cache[cache_key] = record
 
     events = log if log is not None else record.events
+    selector_state: dict[str, Any] = {"rejected": None}
     try:
         unpaid = observe_unpaid_402(url, timeout=min(timeout, 30.0))
         record.http_402_status = unpaid.status_code
@@ -150,25 +290,27 @@ def purchase_premium(
             return record
 
         audit.add(events, "X402_PAYMENT_NEGOTIATION_STARTED", url=url)
-        session = _buyer_session()
+        session = _buyer_session(
+            expected_drops=expected_drops,
+            remaining_budget_drops=remaining_budget_drops,
+            selector_state=selector_state,
+        )
         paid = session.get(url, timeout=timeout)
-        header = _header(paid, "PAYMENT-RESPONSE")
-        decoded = None
-        if header:
-            try:
-                decoded = decode_payment_response(header)
-            except Exception:
-                try:
-                    decoded = json.loads(header)
-                except Exception:
-                    decoded = None
-        tx_hash = extract_tx_hash(decoded if isinstance(decoded, dict) else None)
-        fee = extract_network_fee_drops(decoded if isinstance(decoded, dict) else None)
+        if selector_state["rejected"] is not None:
+            record.state = REQUIREMENT_REJECTED
+            record.error = str(selector_state["rejected"])
+            return record
+
+        decoded = _decode_payment_header(paid)
+        tx_hash = extract_tx_hash(decoded)
+        fee = extract_network_fee_drops(decoded)
+        record.tx_hash = tx_hash
+        record.network_fee_drops = fee
+        if decoded:
+            record.settlement = decoded
 
         if paid.status_code == 200:
             record.state = SUCCESS
-            record.tx_hash = tx_hash
-            record.network_fee_drops = fee
             record.body = paid.json() if paid.content else {}
             audit.add(
                 events,
@@ -180,8 +322,12 @@ def purchase_premium(
             audit.add(events, "PREMIUM_RESOURCE_UNLOCKED", status_code=200)
             return record
 
-        record.state = FAILED
+        record.state = UNKNOWN
         record.error = f"Paid request returned HTTP {paid.status_code}: {paid.text[:300]}"
+        return record
+    except PaymentRequirementRejected as exc:
+        record.state = REQUIREMENT_REJECTED
+        record.error = str(exc)
         return record
     except Exception as exc:  # payment may already have been submitted
         record.state = UNKNOWN

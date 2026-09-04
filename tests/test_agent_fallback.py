@@ -53,6 +53,32 @@ def test_payment_failure_returns_public_only(monkeypatch):
     assert result["premium_purchase"] == payment.FAILED
 
 
+def test_missing_wallet_is_config_error_not_unknown(monkeypatch):
+    payment.reset_cache()
+    monkeypatch.delenv("XRPL_WALLET_SEED", raising=False)
+    monkeypatch.delenv("XRPL_PAY_TO", raising=False)
+    monkeypatch.setattr(
+        agent,
+        "_fetch_json",
+        lambda url, timeout=15.0: {
+            "freshness_hours": 72,
+            "quality_score": 0.62,
+            "synthetic": True,
+        },
+    )
+    result = run_research(
+        question="Assess whether Port X is becoming congested.",
+        budget_drops=5000,
+        run_id="cfg-run",
+    )
+    assert result["premium_purchase"] == payment.CONFIG_ERROR
+    assert result["payment_status"] == payment.CONFIG_ERROR
+    assert result["fallback"] == "PUBLIC_ONLY"
+    assert result["final_confidence"] == 0.58
+    assert "cfg-run:satellite-logistics-intel" not in payment._cache
+    assert "wallet configuration missing" in (result.get("reason") or "").lower()
+
+
 def test_duplicate_purchase_reuses_success(monkeypatch):
     payment.reset_cache()
     record = payment.PurchaseRecord(

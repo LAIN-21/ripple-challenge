@@ -175,13 +175,30 @@ def run_research(
     audit.add(log, "PURCHASE_APPROVED", reason=policy_result["reason"])
 
     try:
+        payment.require_wallet_env()
+    except RuntimeError as exc:
+        result["payment_status"] = payment.CONFIG_ERROR
+        result["premium_purchase"] = payment.CONFIG_ERROR
+        result["fallback"] = "PUBLIC_ONLY"
+        result["reason"] = str(exc)
+        return result
+
+    try:
         premium_url = providers.resolve_url(premium_meta)
         purchase = payment.purchase_premium(
             url=premium_url,
             run_id=run_id,
             provider_id=str(premium_meta["id"]),
+            expected_drops=int(premium_meta.get("price_drops") or 0),
+            remaining_budget_drops=remaining,
             log=log,
         )
+    except RuntimeError as exc:
+        result["payment_status"] = payment.CONFIG_ERROR
+        result["premium_purchase"] = payment.CONFIG_ERROR
+        result["fallback"] = "PUBLIC_ONLY"
+        result["reason"] = str(exc)
+        return result
     except Exception as exc:
         result["payment_status"] = payment.UNKNOWN
         result["premium_purchase"] = payment.UNKNOWN

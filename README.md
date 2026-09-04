@@ -12,14 +12,17 @@ Demo amounts (integer drops internally; XRP for display only). The budget is **d
 - Premium query: **1200 drops / 0.0012 XRP**
 - Procurement remaining: **3800 drops / 0.0038 XRP**
 
+## Local setup
+
 ### Clone
 
 ```bash
 git clone https://github.com/LAIN-21/ripple-challenge.git
 cd ripple-challenge
+git checkout -b your-feature
 ```
 
-Push your work to `team` (`https://github.com/LAIN-21/ripple-challenge.git`). Do **not** push to `origin` (the official Singhacks starter).
+Work on a new branch. Open a pull request for every change.
 
 ### Prerequisites
 
@@ -51,7 +54,7 @@ make wallet-setup
 
 `make wallet-setup` funds two XRPL Testnet wallets (buyer + merchant) and **prints** credentials. It does **not** write `.env`. Paste these two lines into `.env`:
 
-```
+```dotenv
 XRPL_WALLET_SEED=<buyer seed from the printout>
 XRPL_PAY_TO=<merchant address from the printout>
 ```

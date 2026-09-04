@@ -21,6 +21,7 @@ budget = st.number_input("Research Budget (drops)", min_value=0, value=5000, ste
 st.caption("Displayed as XRP in the sidebar after a run. Budget is data-procurement only (no XRPL network fee).")
 
 if st.button("Run Research", type="primary"):
+    st.session_state.pop("result", None)
     try:
         response = requests.post(
             f"{ORCH.rstrip('/')}/research",

@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from apps.free_provider.main import app as free_app
 from ledger402.providers import get_provider, providers_for_category, resolve_url
@@ -37,3 +38,16 @@ def test_premium_unpaid_returns_402(monkeypatch):
     client = TestClient(create_app())
     unpaid = client.get("/intelligence/port-congestion")
     assert unpaid.status_code == 402
+
+
+def test_premium_create_app_requires_pay_to(monkeypatch):
+    monkeypatch.setenv("XRPL_PAY_TO", "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe")
+    from apps.premium_provider.main import create_app
+
+    monkeypatch.delenv("XRPL_PAY_TO", raising=False)
+    with pytest.raises(RuntimeError, match="XRPL_PAY_TO"):
+        create_app()
+
+    monkeypatch.setenv("XRPL_PAY_TO", "   ")
+    with pytest.raises(RuntimeError, match="XRPL_PAY_TO"):
+        create_app()

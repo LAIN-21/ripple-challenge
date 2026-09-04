@@ -50,6 +50,8 @@ def main() -> None:
         url=url,
         run_id="pay-once",
         provider_id=str(premium["id"]),
+        expected_drops=price,
+        remaining_budget_drops=price,
     )
     print("Payment:")
     print(result.state)
