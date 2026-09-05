@@ -5,29 +5,20 @@ from ledger402 import payment
 
 @pytest.fixture(autouse=True)
 def block_dotenv(monkeypatch):
-    """Prevent the repo's real .env from ever reaching a test.
-
-    apps/orchestrator/main.py (and the provider apps) call `load_dotenv(".env")` at
-    import time. That import is lazy — it happens inside whichever test first does
-    `from apps.orchestrator.main import app` — which is *after* this fixture's sibling
-    below has already cleared GROQ_API_KEY/GEMINI_API_KEY for the test. Without this,
-    load_dotenv repopulates them from the developer's real .env, and a test silently
-    makes a real network call to whatever LLM is configured. Patched at the dotenv
-    module itself so it is inert regardless of import order.
-    """
     monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: False)
 
 
 @pytest.fixture(autouse=True)
 def provider_bases(monkeypatch):
+    monkeypatch.setenv("PROVIDER_URL", "http://localhost:8001")
     monkeypatch.setenv("FREE_PROVIDER_URL", "http://localhost:8001")
-    monkeypatch.setenv("PREMIUM_PROVIDER_URL", "http://localhost:8002")
-    monkeypatch.setenv("TELEMETRY_PROVIDER_URL", "http://localhost:8003")
+    monkeypatch.setenv("PREMIUM_PROVIDER_URL", "http://localhost:8001")
+    monkeypatch.setenv("TELEMETRY_PROVIDER_URL", "http://localhost:8001")
+    monkeypatch.setenv("B2C_PROVIDER_URL", "http://localhost:8001")
     monkeypatch.setenv("XRPL_WALLET_SEED", "sEdTestWalletSeedNotForSigning")
     monkeypatch.setenv("XRPL_PAY_TO", "rMerchantPayToAddressForTests")
     monkeypatch.setenv("XRPL_NETWORK", "xrpl:1")
-    # The test suite must never reach an inference provider, and must exercise the
-    # deterministic fallbacks that the demo depends on.
+    monkeypatch.setenv("LEDGER402_SKIP_FAUCET", "1")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
@@ -37,38 +28,52 @@ def provider_bases(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def clean_payment_cache():
-    """Process-local idempotency must not leak between tests."""
     payment.reset_cache()
+    try:
+        from ledger402 import marketplace
+
+        marketplace.reset()
+    except Exception:
+        pass
     yield
     payment.reset_cache()
+    try:
+        from ledger402 import marketplace
+
+        marketplace.reset()
+    except Exception:
+        pass
 
 
-# Payloads the paid providers return, mirroring data/*.json.
 SATELLITE_BODY = {
-    "provider_id": "satellite-logistics-intel",
+    "provider_id": "satellite_logistics_paid",
     "provider_name": "Satellite Logistics Intelligence",
-    "port": "Port X",
-    "container_density_delta": 0.24,
-    "anchored_vessels_delta": 0.31,
-    "yard_utilization": 0.91,
-    "truck_activity_delta": 0.18,
+    "port": "Port of Singapore (PSA Multi-Terminal)",
+    "port_code": "SGSIN",
+    "container_density_delta": 0.94,
+    "anchored_vessels_delta": 52,
+    "yard_utilization": 0.89,
+    "truck_activity_delta": 4.8,
     "freshness_hours": 3,
     "quality_score": 0.93,
     "synthetic": True,
 }
 
 TELEMETRY_BODY = {
-    "provider_id": "terminal-ops-telemetry",
+    "provider_id": "terminal_telemetry_paid",
     "provider_name": "Terminal Operations Telemetry",
-    "port": "Port X",
-    "gate_turnaround_minutes": 84,
-    "rail_dwell_hours": 41.5,
+    "port": "Port of Singapore",
+    "port_code": "SGSIN",
+    "gate_turnaround_minutes": 41.5,
+    "rail_dwell_hours": 0.92,
     "freshness_hours": 6,
     "quality_score": 0.81,
     "synthetic": True,
 }
 
 _BODY_FOR_PATH = {
+    "/api/b2b/satellite-logistics": (SATELLITE_BODY, "A" * 64),
+    "/api/b2b/terminal-telemetry": (TELEMETRY_BODY, "B" * 64),
     "/intelligence/port-congestion": (SATELLITE_BODY, "A" * 64),
     "/intelligence/terminal-operations": (TELEMETRY_BODY, "B" * 64),
 }
@@ -76,13 +81,6 @@ _BODY_FOR_PATH = {
 
 @pytest.fixture
 def settling_agent(monkeypatch):
-    """Mock only the network and signing boundary.
-
-    `purchase_premium`'s real control flow runs, including the audit events a live view
-    depends on (HTTP_402_OBSERVED, negotiation, confirmation, unlock). Nothing is signed
-    and no Testnet XRP is spent. Prefer this over mocking `purchase_premium` wholesale
-    whenever a test cares about the event stream rather than only the outcome.
-    """
     settled: list[str] = []
 
     def body_for(url: str):

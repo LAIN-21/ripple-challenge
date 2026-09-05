@@ -22,17 +22,32 @@ You are an institutional research analyst writing a short briefing for a decisio
 
 Rules, in priority order:
 1. Use ONLY the evidence JSON provided. You have no other knowledge about this subject.
-2. Every quantitative claim must trace to a field in that JSON.
-3. If the evidence is insufficient for a firm conclusion, say so plainly.
+2. Every quantitative claim must trace to a field in that JSON. Never invent signals.
+3. If the evidence is insufficient for a firm conclusion, or the asked-about entity \
+does not match the evidence (for example the question is about Port Klang but every \
+payload is labeled SGSIN / Port of Singapore), return verdict "UNCLEAR / INSUFFICIENT_EVIDENCE".
 4. State the confidence figure you are given. Do not invent your own.
 5. No preamble, no sign-off, no markdown headers.
 
 Return ONLY a JSON object:
-{"verdict": "<HIGH | MODERATE | LOW> congestion risk, or UNCLEAR",
+{"verdict": "<HIGH | MODERATE | LOW congestion risk, or UNCLEAR / INSUFFICIENT_EVIDENCE>",
  "summary": "<2-3 sentences a decision maker can act on>",
  "evidence": ["<one bullet per material data point, each naming its source>"],
  "caveats": ["<limitations of the evidence held>"]}
 """
+
+_FOREIGN_PORTS = (
+    "klang",
+    "rotterdam",
+    "shanghai",
+    "los angeles",
+    "long beach",
+    "hamburg",
+    "busan",
+    "ningbo",
+)
+
+_LOCAL_ALIASES = ("sgsin", "singapore", "psa")
 
 # Verdict thresholds for the deterministic path, on yard utilization.
 _HIGH_YARD_UTILIZATION = 0.85
@@ -133,9 +148,9 @@ def synthesize_template(
             ("vessel_queue", "Vessels queued", lambda v: f"{int(v)}"),
             ("average_wait_hours", "Average wait", lambda v: f"{float(v):.1f} h"),
             ("yard_utilization", "Yard utilization", _percent),
-            ("anchored_vessels_delta", "Anchored vessel activity", lambda v: f"+{_percent(v)}"),
-            ("container_density_delta", "Container density", lambda v: f"+{_percent(v)}"),
-            ("truck_activity_delta", "Truck activity", lambda v: f"+{_percent(v)}"),
+            ("anchored_vessels_delta", "Anchored vessels", lambda v: f"{int(v)}" if float(v) > 1.5 else f"+{_percent(v)}"),
+            ("container_density_delta", "Container density", lambda v: _percent(v) if float(v) <= 1.5 else f"{float(v):.2f}"),
+            ("truck_activity_delta", "Truck activity", lambda v: f"{float(v):.1f} h" if float(v) > 1.5 else f"+{_percent(v)}"),
             ("gate_turnaround_minutes", "Gate turnaround", lambda v: f"{float(v):.0f} min"),
             ("rail_dwell_hours", "Rail dwell", lambda v: f"{float(v):.1f} h"),
         ):
@@ -173,6 +188,46 @@ def synthesize_template(
     )
 
 
+def _evidence_blob(evidence: Sequence[EvidenceItem]) -> str:
+    parts: list[str] = []
+    for item in evidence:
+        payload = item.payload or {}
+        for key in ("port_code", "port", "facility_name"):
+            value = payload.get(key)
+            if value:
+                parts.append(str(value))
+    return " ".join(parts).lower()
+
+
+def entity_mismatch(subject: str, evidence: Sequence[EvidenceItem]) -> bool:
+    """True when the question names a different port than the held payloads."""
+    if not subject or not evidence:
+        return False
+    blob = _evidence_blob(evidence)
+    if not blob:
+        return False
+    local = any(alias in blob for alias in _LOCAL_ALIASES)
+    if not local:
+        return False
+    subj = subject.lower()
+    if any(alias in subj for alias in _LOCAL_ALIASES):
+        return False
+    return any(name in subj for name in _FOREIGN_PORTS)
+
+
+def _insufficient(subject: str) -> Report:
+    return Report(
+        verdict="UNCLEAR / INSUFFICIENT_EVIDENCE",
+        summary=(
+            f"Held evidence is labelled for a different entity than {subject}. "
+            "No briefing is issued from unmatched payloads."
+        ),
+        evidence=[],
+        caveats=["Evidence entity does not match the research question."],
+        method="template",
+    )
+
+
 def synthesize(
     evidence: Sequence[EvidenceItem],
     *,
@@ -189,6 +244,9 @@ def synthesize(
             caveats=["No provider returned data."],
             method="template",
         )
+
+    if entity_mismatch(subject, evidence):
+        return _insufficient(subject)
 
     fallback = synthesize_template(evidence, confidence=confidence, subject=subject)
     if not llm.is_enabled():

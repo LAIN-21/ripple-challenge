@@ -11,6 +11,7 @@ question cannot talk the agent into serving evidence it does not have.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -68,13 +69,20 @@ def _matches_keywords(question: str, spec: TaskSpec) -> bool:
 
 
 def _extract_subject(question: str) -> str | None:
-    """Best-effort subject extraction without an LLM: the token after "port"."""
-    words = question.replace(",", " ").replace(".", " ").split()
+    """Best-effort subject extraction without an LLM."""
+    text = question or ""
+    if re.search(r"port of singapore|\bPSA\b|\bSGSIN\b", text, re.I):
+        return "Port of Singapore (PSA)"
+    words = text.replace(",", " ").replace(".", " ").split()
     for index, word in enumerate(words[:-1]):
-        if word.lower().strip("?") == "port":
-            candidate = words[index + 1].strip("?'\"")
-            if candidate and candidate[0].isupper():
-                return f"Port {candidate}"
+        if word.lower().strip("()?") == "port":
+            rest = words[index + 1].strip("?'\"")
+            if rest.lower() == "of" and index + 2 < len(words):
+                place = words[index + 2].strip("?'\"")
+                if place:
+                    return f"Port of {place}"
+            if rest and rest[0].isupper():
+                return f"Port {rest}"
     return None
 
 

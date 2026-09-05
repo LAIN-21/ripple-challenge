@@ -55,6 +55,13 @@ def agreement(
             {
                 "target": f"urn:ledger402:dataset:{dataset_id}",
                 "action": "derive",
+                "constraint": [
+                    {
+                        "leftOperand": "purpose",
+                        "operator": "eq",
+                        "rightOperand": "commercialDerivative",
+                    }
+                ],
                 "duty": [
                     {
                         "action": "attribute",

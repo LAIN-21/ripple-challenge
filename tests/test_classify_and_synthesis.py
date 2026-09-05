@@ -1,6 +1,6 @@
 """The two LLM-touching nodes, and the deterministic behaviour they fall back to.
 
-These tests run with GROQ_API_KEY unset (see conftest), so they exercise the fallback
+These tests run with GEMINI_API_KEY unset (see conftest), so they exercise the fallback
 path the demo depends on, plus the guards that stop an LLM answer from widening what the
 agent is willing to serve.
 """
@@ -27,6 +27,14 @@ def test_port_question_is_classified_deterministically():
     assert result.subject == "Port X"
 
 
+def test_psa_question_extracts_the_singapore_subject():
+    result = classify.classify(
+        "Assess whether Port of Singapore (PSA) is facing critical yard and terminal congestion"
+    )
+    assert result.supported
+    assert result.subject == "Port of Singapore (PSA)"
+
+
 @pytest.mark.parametrize(
     "question",
     [
@@ -51,7 +59,7 @@ def test_declared_unsupported_task_type_is_rejected_without_an_llm(monkeypatch):
 
 def test_llm_cannot_widen_the_supported_task_set(monkeypatch):
     """A hallucinated or injected task type is still rejected."""
-    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(
         llm,
         "complete_json",
@@ -68,10 +76,10 @@ def test_llm_cannot_widen_the_supported_task_set(monkeypatch):
 
 
 def test_llm_failure_falls_back_to_the_rule(monkeypatch):
-    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
     def boom(*args, **kwargs):
-        raise llm.LLMUnavailable("groq down")
+        raise llm.LLMUnavailable("gemini down")
 
     monkeypatch.setattr(llm, "complete_json", boom)
     result = classify.classify(QUESTION)
@@ -80,7 +88,7 @@ def test_llm_failure_falls_back_to_the_rule(monkeypatch):
 
 
 def test_llm_classification_is_used_when_available(monkeypatch):
-    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(
         llm,
         "complete_json",
@@ -145,7 +153,7 @@ def test_dossier_summary_is_order_independent():
 
 
 def test_empty_llm_summary_falls_back_to_the_template(monkeypatch):
-    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(llm, "complete_json", lambda *a, **k: {"summary": "   "})
     report = synthesis.synthesize(
         [FREE, SATELLITE], question=QUESTION, confidence=0.87, subject="Port X"
@@ -155,7 +163,7 @@ def test_empty_llm_summary_falls_back_to_the_template(monkeypatch):
 
 def test_llm_report_keeps_the_synthetic_caveat(monkeypatch):
     """The LLM cannot drop the disclosure by omitting it."""
-    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(
         llm,
         "complete_json",

@@ -14,10 +14,12 @@ class ResearchRequest(BaseModel):
 
     run_id: str | None = None
     task_type: str | None = None
-    question: str = "Assess whether Port X is becoming congested."
+    question: str = "Assess whether Port of Singapore (PSA) is facing critical yard and terminal congestion."
     budget_drops: int = Field(default=5000, ge=0)
     target_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     max_purchases: int | None = Field(default=None, ge=0, le=10)
+    delivery_tier: str | None = Field(default="tier_1")
+    replay: bool = False
 
 
 class AuditEvent(BaseModel):

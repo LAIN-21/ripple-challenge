@@ -74,9 +74,9 @@ def test_purchase_reports_a_blocked_network_as_config_error_not_unknown(monkeypa
     monkeypatch.setattr(payment, "observe_unpaid_402", lambda url, timeout=None: Fake402())
 
     record = payment.purchase_premium(
-        url="http://localhost:8002/intelligence/port-congestion",
+        url="http://localhost:8001/api/b2b/satellite-logistics",
         run_id="guard-run",
-        provider_id="satellite-logistics-intel",
+        provider_id="satellite_logistics_paid",
         expected_drops=1200,
         remaining_budget_drops=5000,
     )

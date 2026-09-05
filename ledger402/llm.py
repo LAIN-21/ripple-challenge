@@ -1,26 +1,11 @@
-"""LLM access, with deterministic degradation.
+"""LLM access via Google Gemini, with deterministic degradation.
 
 The agent must run with no API key, no network, and no LLM. Every call site here has a
-deterministic fallback, so an LLM outage degrades the prose and never the spend: the LLM
-classifies questions and writes reports, it never decides to pay.
+deterministic fallback, so an LLM outage degrades the prose and never the spend.
 
-Two providers are supported, both through their OpenAI-compatible chat completion
-endpoint, so one client class covers either:
+Cascade on transient capacity errors (one attempt each, no backoff):
 
-  - Groq: the hackathon's provided inference stack (LPU hardware, low latency).
-  - Gemini: Google's API, also OpenAI-compatible, used when Groq credits are not
-    available. See https://ai.google.dev/gemini-api/docs/openai
-
-Within whichever provider is active, each call tries a small cascade of models rather
-than one fixed model. A model returning 503/429 ("high demand") is a capacity problem
-with that specific model, not with the account or the provider — a sibling model usually
-has separate capacity and answers immediately. This is a fallback, not a retry: no
-backoff or repeated attempts against the same model, because a live demo needs an answer
-in seconds, not after several timeouts.
-
-Whichever model ultimately answers, the contract with the rest of the codebase is
-identical: `is_enabled()`, `complete()`, `complete_json()`. Callers do not know or care
-which provider or model answered.
+    gemini-2.5-flash -> gemini-2.5-pro -> gemini-1.5-flash
 """
 
 from __future__ import annotations
@@ -29,61 +14,18 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger(__name__)
 
-# LLM calls sit on the demo's critical path; fail fast rather than hang the UI. Each
-# model in the cascade gets exactly one attempt (no built-in retries) so a stuck model
-# costs one timeout, not several, before the cascade moves on.
 DEFAULT_TIMEOUT_SECONDS = 12.0
-DEFAULT_MAX_RETRIES = 0
 
-
-@dataclass(frozen=True)
-class ProviderSpec:
-    name: str
-    key_env: str
-    base_url: str
-    # Tried in order. The first entry is the "primary" model shown by model_name();
-    # later entries are capacity fallbacks, not quality downgrades chosen lightly.
-    models: tuple[str, ...]
-    model_env: str
-
-
-GROQ = ProviderSpec(
-    name="groq",
-    key_env="GROQ_API_KEY",
-    base_url="https://api.groq.com/openai/v1",
-    models=(
-        "llama-3.3-70b-versatile",  # primary: most capable
-        "llama-3.1-8b-instant",  # fallback: smaller, separate capacity pool, still fast
-    ),
-    model_env="GROQ_MODEL",
+GEMINI_MODELS: tuple[str, ...] = (
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-1.5-flash",
 )
 
-GEMINI = ProviderSpec(
-    name="gemini",
-    key_env="GEMINI_API_KEY",
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    models=(
-        "gemini-3.5-flash",  # primary: current stable Flash tier
-        "gemini-3.7-flash",  # fallback: different model family, separate capacity
-        "gemini-3.5-flash-lite",  # fallback: lighter tier, usually has headroom
-        "gemini-2.5-flash",  # last resort: previous generation, most likely to be free
-        # (2.5-flash is scheduled to retire ~Oct 2026; kept as the final rung only
-        # because it is otherwise the most likely to have spare capacity today)
-    ),
-    model_env="GEMINI_MODEL",
-)
-
-# Order expresses preference when more than one key is present: Groq is the hackathon's
-# provided stack (and lower latency), so it wins a tie. LLM_PROVIDER overrides this.
-PROVIDERS = (GROQ, GEMINI)
-
-# HTTP statuses that mean "this model is temporarily out of capacity", not "your request
-# or key is invalid". Only these advance the cascade to the next model.
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
 
 
@@ -91,134 +33,137 @@ class LLMUnavailable(RuntimeError):
     """No usable LLM: missing key, missing package, or every model in the cascade failed."""
 
 
-def _configured_key(provider: ProviderSpec) -> str:
-    return (os.getenv(provider.key_env) or "").strip()
-
-
-def active_provider() -> ProviderSpec | None:
-    """Which provider is configured, honouring an explicit LLM_PROVIDER override."""
-    forced = (os.getenv("LLM_PROVIDER") or "").strip().lower()
-    if forced:
-        match = next((p for p in PROVIDERS if p.name == forced), None)
-        if match and _configured_key(match):
-            return match
-        return None  # An explicit choice with no key is not silently substituted.
-
-    for provider in PROVIDERS:
-        if _configured_key(provider):
-            return provider
-    return None
+def _configured_key() -> str:
+    return (os.getenv("GEMINI_API_KEY") or "").strip()
 
 
 def is_enabled() -> bool:
-    return active_provider() is not None
+    return bool(_configured_key())
 
 
-def model_cascade(provider: ProviderSpec) -> tuple[str, ...]:
-    """The models to try, in order, for `provider`.
-
-    GROQ_MODEL / GEMINI_MODEL overrides the whole cascade: a comma-separated list
-    becomes a custom cascade, and a single value becomes a cascade of one (explicit
-    means explicit — no silent fallback to models the operator did not ask for).
-    """
-    override = (os.getenv(provider.model_env) or "").strip()
+def model_cascade() -> tuple[str, ...]:
+    override = (os.getenv("GEMINI_MODEL") or "").strip()
     if not override:
-        return provider.models
+        return GEMINI_MODELS
     return tuple(m.strip() for m in override.split(",") if m.strip())
 
 
 def model_name() -> str:
-    """The primary (first-choice) model for display. See model_cascade() for the rest."""
-    provider = active_provider()
-    if provider is None:
-        return ""
-    cascade = model_cascade(provider)
-    return cascade[0] if cascade else ""
+    cascade = model_cascade()
+    return cascade[0] if cascade and is_enabled() else ""
 
 
 def provider_name() -> str:
-    provider = active_provider()
-    return provider.name if provider else ""
+    return "gemini" if is_enabled() else ""
+
+
+def _status_code(exc: Exception) -> int | None:
+    for attr in ("status_code", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict) and isinstance(details.get("code"), int):
+        return int(details["code"])
+    return None
 
 
 def _is_retryable(exc: Exception) -> bool:
-    status = getattr(exc, "status_code", None)
+    status = _status_code(exc)
     if status is not None:
         return status in _RETRYABLE_STATUS_CODES
-    # Connection-level failures (DNS, timeout, reset) carry no status code but are just
-    # as much a "try the next model" situation as a 503 is.
     type_name = type(exc).__name__
-    return type_name in {"APIConnectionError", "APITimeoutError", "Timeout"}
+    return type_name in {
+        "APIConnectionError",
+        "APITimeoutError",
+        "Timeout",
+        "ServerError",
+        "ConnectError",
+    }
 
 
-def _build_client(provider: ProviderSpec, model: str) -> Any:
+def _extract_text(response: Any) -> str:
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    content = getattr(response, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(str(part.get("text") or ""))
+            else:
+                parts.append(str(getattr(part, "text", "") or ""))
+        joined = "".join(parts).strip()
+        if joined:
+            return joined
+    return ""
+
+
+def _generate(model: str, system: str, user: str) -> str:
     try:
-        from langchain_openai import ChatOpenAI
-    except ImportError as exc:  # pragma: no cover - dependency is pinned in requirements
-        raise LLMUnavailable(f"langchain-openai is not installed: {exc}") from exc
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:  # pragma: no cover
+        raise LLMUnavailable(f"google-genai is not installed: {exc}") from exc
 
-    return ChatOpenAI(
+    timeout = float(os.getenv("LLM_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT_SECONDS)
+    client = genai.Client(api_key=_configured_key())
+    http_options = None
+    try:
+        http_options = types.HttpOptions(timeout=int(timeout * 1000))
+    except Exception:
+        http_options = None
+    config_kwargs: dict[str, Any] = {
+        "system_instruction": system,
+        "temperature": 0.0,
+    }
+    if http_options is not None:
+        config_kwargs["http_options"] = http_options
+    response = client.models.generate_content(
         model=model,
-        api_key=_configured_key(provider),
-        base_url=provider.base_url,
-        temperature=0.0,
-        timeout=float(os.getenv("LLM_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT_SECONDS),
-        max_retries=int(os.getenv("LLM_MAX_RETRIES") or DEFAULT_MAX_RETRIES),
+        contents=user,
+        config=types.GenerateContentConfig(**config_kwargs),
     )
+    return _extract_text(response)
 
 
 def complete(system: str, user: str) -> str:
-    """One completion, cascading through models on capacity errors.
+    """One completion, cascading through Gemini models on capacity errors."""
+    if not is_enabled():
+        raise LLMUnavailable("No LLM configured: set GEMINI_API_KEY.")
 
-    Raises LLMUnavailable if no LLM is configured, if every model in the cascade is
-    unavailable, or immediately on a non-capacity error (bad key, malformed request) —
-    retrying that against a different model would not help and would only add latency.
-    """
-    provider = active_provider()
-    if provider is None:
-        raise LLMUnavailable("No LLM configured: set GROQ_API_KEY or GEMINI_API_KEY.")
-
-    cascade = model_cascade(provider)
+    cascade = model_cascade()
     if not cascade:
-        raise LLMUnavailable(f"{provider.name}: no model configured.")
+        raise LLMUnavailable("gemini: no model configured.")
 
     last_exc: Exception | None = None
     for attempt, model in enumerate(cascade):
         try:
-            client = _build_client(provider, model)
-            response = client.invoke([("system", system), ("human", user)])
+            text = _generate(model, system, user)
         except LLMUnavailable:
             raise
         except Exception as exc:
             if not _is_retryable(exc) or attempt == len(cascade) - 1:
-                raise LLMUnavailable(f"{provider.name}/{model} call failed: {exc}") from exc
+                raise LLMUnavailable(f"gemini/{model} call failed: {exc}") from exc
             log.info(
-                "%s/%s unavailable (%s); falling back to %s",
-                provider.name, model, exc, cascade[attempt + 1],
+                "gemini/%s unavailable (%s); falling back to %s",
+                model,
+                exc,
+                cascade[attempt + 1],
             )
             last_exc = exc
             continue
 
-        text = _extract_text(response)
-        if not text:
+        if not (text or "").strip():
             if attempt == len(cascade) - 1:
-                raise LLMUnavailable(f"{provider.name}/{model} returned an empty completion.")
+                raise LLMUnavailable(f"gemini/{model} returned an empty completion.")
             continue
-        return text
+        return text.strip()
 
-    # Only reachable if every model returned an empty completion.
-    raise LLMUnavailable(f"{provider.name}: every model in the cascade failed ({last_exc}).")
-
-
-def _extract_text(response: Any) -> str:
-    content = getattr(response, "content", response)
-    if isinstance(content, list):
-        # Some providers return content blocks rather than a plain string.
-        content = "".join(
-            part.get("text", "") if isinstance(part, dict) else str(part)
-            for part in content
-        )
-    return str(content).strip()
+    raise LLMUnavailable(f"gemini: every model in the cascade failed ({last_exc}).")
 
 
 def _strip_code_fence(text: str) -> str:
@@ -227,11 +172,6 @@ def _strip_code_fence(text: str) -> str:
 
 
 def complete_json(system: str, user: str) -> dict[str, Any]:
-    """Completion parsed as a JSON object.
-
-    Models wrap JSON in prose or code fences often enough that a bare json.loads is not
-    reliable; the brace-span fallback keeps a good answer from being thrown away.
-    """
     raw = _strip_code_fence(complete(system, user))
     try:
         parsed = json.loads(raw)

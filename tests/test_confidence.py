@@ -7,10 +7,10 @@ import pytest
 from ledger402 import confidence as conf
 from ledger402.confidence import EvidenceItem
 from ledger402.providers import get_provider
-from ledger402.tasks import PORT_CONGESTION_SPEC as SPEC
+from ledger402.tasks import CORE_SIGNAL_WEIGHTS, PORT_CONGESTION_SPEC as SPEC
 
 FREE = EvidenceItem(
-    provider_id="public-port-stats",
+    provider_id="public_port_stats",
     provider_name="Public Port Statistics",
     payload={
         "berth_occupancy": 0.71,
@@ -18,11 +18,12 @@ FREE = EvidenceItem(
         "vessel_queue": 17,
         "freshness_hours": 72,
         "quality_score": 0.62,
+        "port_code": "SGSIN",
     },
 )
 
 SATELLITE = EvidenceItem(
-    provider_id="satellite-logistics-intel",
+    provider_id="satellite_logistics_paid",
     provider_name="Satellite Logistics Intelligence",
     payload={
         "yard_utilization": 0.91,
@@ -31,19 +32,21 @@ SATELLITE = EvidenceItem(
         "truck_activity_delta": 0.18,
         "freshness_hours": 3,
         "quality_score": 0.93,
+        "port_code": "SGSIN",
     },
     paid=True,
     price_drops=1200,
 )
 
 TELEMETRY = EvidenceItem(
-    provider_id="terminal-ops-telemetry",
+    provider_id="terminal_telemetry_paid",
     provider_name="Terminal Operations Telemetry",
     payload={
         "gate_turnaround_minutes": 84,
         "rail_dwell_hours": 41.5,
         "freshness_hours": 6,
         "quality_score": 0.81,
+        "port_code": "SGSIN",
     },
     paid=True,
     price_drops=600,
@@ -51,8 +54,8 @@ TELEMETRY = EvidenceItem(
 
 
 def test_task_weights_sum_to_one():
-    """Coverage is only interpretable if the weights form a full partition."""
-    assert sum(SPEC.signal_weights.values()) == pytest.approx(1.0)
+    """Coverage is only interpretable if the core B2B weights form a full partition."""
+    assert sum(CORE_SIGNAL_WEIGHTS.values()) == pytest.approx(1.0)
 
 
 def test_calibration_reproduces_the_documented_demo_figures():
@@ -134,16 +137,16 @@ def test_confidence_never_exceeds_the_ceiling():
 
 def test_projected_confidence_matches_the_realised_value_when_delivery_is_honest():
     """The buy decision is only sound if the projection tracks what actually arrives."""
-    projected = conf.projected_confidence([FREE], get_provider("satellite-logistics-intel"), SPEC)
+    projected = conf.projected_confidence([FREE], get_provider("satellite_logistics_paid"), SPEC)
     realised = conf.confidence([FREE, SATELLITE], SPEC)
     assert projected == pytest.approx(realised, abs=0.001)
 
 
 def test_projection_does_not_survive_an_under_delivering_provider():
     """A provider that promises signals it does not send loses the credit after payment."""
-    promised = conf.projected_confidence([FREE], get_provider("satellite-logistics-intel"), SPEC)
+    promised = conf.projected_confidence([FREE], get_provider("satellite_logistics_paid"), SPEC)
     delivered = EvidenceItem(
-        provider_id="satellite-logistics-intel",
+        provider_id="satellite_logistics_paid",
         provider_name="Satellite Logistics Intelligence",
         payload={"yard_utilization": 0.91, "freshness_hours": 3, "quality_score": 0.93},
         paid=True,

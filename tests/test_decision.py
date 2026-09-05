@@ -7,7 +7,7 @@ FREE = {
 }
 
 PREMIUM = {
-    "id": "satellite-logistics-intel",
+    "id": "satellite_logistics_paid",
     "name": "Satellite Logistics Intelligence",
     "category": "port_congestion",
     "price_drops": 1200,

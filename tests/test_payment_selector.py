@@ -81,7 +81,7 @@ def _install_paying_session(monkeypatch, invoice, *, remaining=5000, paid_status
 
     sign_calls: list = []
 
-    def fake_buyer_session(*, expected_drops, remaining_budget_drops, selector_state):
+    def fake_buyer_session(*, expected_drops, remaining_budget_drops, selector_state, **kwargs):
         class FakeSession:
             def get(self, url, timeout=None):
                 try:

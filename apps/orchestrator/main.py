@@ -62,12 +62,14 @@ def live_page() -> HTMLResponse:
 
 @app.get("/research/stream")
 def research_stream(
-    question: str = Query(default="Assess whether Port X is becoming congested."),
+    question: str = Query(default="Assess whether Port of Singapore (PSA) is facing critical yard and terminal congestion."),
     budget_drops: int = Query(default=DEFAULT_BUDGET_DROPS, ge=0),
     target_confidence: float | None = Query(default=None, ge=0.0, le=1.0),
     max_purchases: int | None = Query(default=None, ge=0, le=10),
     task_type: str | None = Query(default=None),
     run_id: str | None = Query(default=None),
+    delivery_tier: str | None = Query(default="tier_1"),
+    replay: bool = Query(default=False),
 ) -> StreamingResponse:
     """Server-sent events: one message per audit entry, then the final result.
 
@@ -82,6 +84,8 @@ def research_stream(
             run_id=run_id,
             target_confidence=target_confidence,
             max_purchases=max_purchases,
+            delivery_tier=delivery_tier,
+            replay=replay,
         ):
             yield f"data: {json.dumps(chunk, default=str)}\n\n"
 
@@ -105,6 +109,8 @@ def research(body: ResearchRequest):
         run_id=body.run_id,
         target_confidence=body.target_confidence,
         max_purchases=body.max_purchases,
+        delivery_tier=body.delivery_tier,
+        replay=body.replay,
     )
     status = int(result.get("status_code") or 200)
     if status >= 400:

@@ -1,28 +1,29 @@
 # Ledger402
 
-Autonomous intelligence procurement on XRPL Testnet. The user states a **business objective**; a
-LangGraph agent classifies it, discovers providers, ranks them on **confidence bought per drop**,
-settles over x402 on the XRP Ledger, **re-measures its own uncertainty against the evidence that
-arrived**, and buys again or stops. Payment is part of the workflow, not the product.
+Two-sided agent-native data clearinghouse on XRPL Testnet. A buyer agent states a **business
+objective**; a LangGraph loop classifies it, discovers B2B and B2C providers, ranks them on
+**confidence bought per drop**, settles over x402, **re-measures its own uncertainty**, and
+delivers either a Tier 1 advisory dossier or a Tier 2 verified data bundle.
 
-**The LLM never decides to spend money.** Inference is confined to understanding the question and
-writing the report; every economic decision is deterministic and unit-tested. With no
-`GROQ_API_KEY` set, the agent runs fully deterministically. See [AGENT_PLAN.md](AGENT_PLAN.md).
+**The LLM never decides to spend money.** Gemini is confined to understanding the question and
+(Tier 1 only) writing prose. Ranking, confidence (`FLOOR=0.56`, `SPAN=0.511`), policy, and
+settlement stay deterministic Python. With no `GEMINI_API_KEY`, the agent runs fully
+deterministically. See [AGENT_PLAN.md](AGENT_PLAN.md).
 
 **Real:** x402, XRPL Testnet settlement, the LangGraph loop, budget and policy rails, the audit
 anchor, HTTP provider architecture. Verified end to end on the XRPL Testnet — a full two-settlement
 run produced `tesSUCCESS` payments of 1200 and 600 drops, validated in ledgers 20493969 and 20493983.
 
 **Testnet XRP is not money.** It comes free from a faucet, has no value, cannot be exchanged, and
-lives on a ledger separate from Mainnet. There is nothing to buy and nothing to lose. The build
-refuses to sign against anything but a recognised test network — see
-[ledger402/network.py](ledger402/network.py); `GET /capabilities` reports the current posture.
+lives on a ledger separate from Mainnet. The build refuses to sign against anything but a recognised
+test network — see [ledger402/network.py](ledger402/network.py); `GET /capabilities` reports the
+current posture.
 
-**Synthetic:** port data, satellite data, telemetry, provider identities, ODRL terms, commercial
-pricing. The confidence model is a calibrated heuristic, not a validated forecasting model.
+**Synthetic:** port data, satellite data, telemetry, curator CSV, provider identities, ODRL terms,
+commercial pricing. The confidence model is a calibrated heuristic, not a validated forecasting model.
 
-Supported task type: `port_congestion` (Port X). Anything else fails closed with 400 rather than
-being answered with Port X evidence.
+Supported task type: `port_congestion` (Port of Singapore / PSA / SGSIN). Anything else fails closed
+with 400 rather than being answered with SGSIN evidence.
 
 ### What the agent does with the budget
 
@@ -83,9 +84,9 @@ XRPL_WALLET_SEED=<buyer seed from the printout>
 XRPL_PAY_TO=<merchant address from the printout>
 ```
 
-Leave every other value from `.env.example` unchanged. Each person funds their own wallets. Never commit `.env`, never share the buyer seed, never reuse another teammate's seed.
+Optionally add `GEMINI_API_KEY` for classification and Tier 1 prose. Leave every other value from `.env.example` unchanged. Each person funds their own wallets. Never commit `.env`, never share the buyer seed, never reuse another teammate's seed.
 
-Then start all four processes (Ctrl+C stops them together):
+Then start the three processes (Ctrl+C stops them together):
 
 ```bash
 make dev-start
@@ -95,66 +96,61 @@ make dev-start
 | --- | --- |
 | Business dashboard (Streamlit) | http://localhost:8501 |
 | **Agent execution animation** | **http://localhost:8000/live** |
-| Orchestrator | http://localhost:8000 |
-| Free provider | http://localhost:8001 |
-| Premium provider (satellite, 1200 drops) | http://localhost:8002 |
-| Telemetry provider (terminal ops, 600 drops) | http://localhost:8003 |
+| Orchestrator / SSE | http://localhost:8000 |
+| Provider gateway (`server.py`, B2B + B2C) | http://localhost:8001 |
 
-Ports `8000`, `8001`, `8002`, `8003`, and `8501` must be free.
+Ports `8000`, `8001`, and `8501` must be free.
+
+Canonical B2B routes on the gateway:
+
+- `GET /api/b2b/public-stats` — 200, 0 drops
+- `GET /api/b2b/satellite-logistics` — unpaid 402, 1200 drops
+- `GET /api/b2b/terminal-telemetry` — unpaid 402, 600 drops
+- `POST /api/b2c/upload` — curator CSV/JSON, default 400 drops (not auto-registered)
 
 ### Demo: the two screens
 
 The deliverable spec asks for a dual-screen demo. Both screens are served by `make dev-start`:
 
-- **Screen 1 — http://localhost:8501** the business dashboard: verdict, confidence waterfall, signals, ODRL rights.
-- **Screen 2 — http://localhost:8000/live** the agent execution animation: the decision graph with the
-  current node lit, confidence and budget gauges moving, the provider ranking as the agent computes it,
-  and each XRPL settlement as it lands. Gold means real money moving.
+- **Screen 1 — http://localhost:8501** three-panel dashboard: inputs and delivery tier on the left, dossier or data bundle in the centre, live execution + B2C upload on the right.
+- **Screen 2 — http://localhost:8000/live** the agent execution animation: the decision graph with the current node lit, confidence and budget gauges moving, the provider ranking as the agent computes it, and each XRPL settlement as it lands.
 
-The animation is driven by server-sent events from the agent itself (`GET /research/stream`), one message
-per audit entry — it is a view over the real run, not a scripted replay. Events are paced for legibility
-and speed up if they queue, so it never drifts behind the agent. Run the agent **from the animation page**
-(it has its own controls) and watch both screens.
+The animation is driven by server-sent events from the agent itself (`GET /research/stream`). Check **Use Offline Replay Mode** in Streamlit to walk the 58% → 87% → 91.6% path on recorded Testnet hashes without signing.
 
 ### Demo in the UI
 
 1. Open http://localhost:8501
-2. Leave the default objective: `Assess whether Port X is becoming congested.`
+2. Leave the default objective: `Assess whether Port of Singapore (PSA) is facing critical yard and terminal congestion`
 3. Leave budget at **5000** drops and target confidence at **0.85**
-4. Click **Run research** (can take a few minutes; it settles on Testnet)
+4. Choose **Tier 1: Strategic Advisory Dossier** (or Tier 2 for the raw bundle)
+5. Click **Run research** (live settlement can take a few minutes)
 
-**Executive briefing** shows the verdict, the confidence waterfall (what each purchase was worth),
-and the congestion signals. **Agent execution** shows the per-iteration ranking — including what the
-agent *declined* to buy and why — and the timestamped log. **Evidence & rights** shows each payload
-with the ODRL usage rights that arrived with payment.
+Then raise the target to **0.92** and run again: the same agent settles a second time against the cheaper telemetry feed, and stops at 91.6% rather than claiming it hit the target.
 
-Then raise the target to **0.92** and run again: the same agent settles a second time against the
-cheaper telemetry feed, and stops at 91.6% rather than claiming it hit the target.
+Unsupported objectives (anything that is not port congestion) return **400** and never receive SGSIN evidence. A question about a different port (for example Port Klang) against held SGSIN payloads returns `UNCLEAR / INSUFFICIENT_EVIDENCE`.
 
-Unsupported objectives (anything that is not port congestion) return **400** and never receive Port X
-evidence.
+The centre pane offers `st.download_button` exports: `Ledger402_Advisory_Dossier.md` (Tier 1) or `Ledger402_Data_Bundle.json` / `Ledger402_Data_Bundle.csv` (Tier 2). The 75% Tier 2 discount is product SKU copy only — x402 prices stay 1200 + 600.
 
 ### Optional: LLM reasoning
 
-Groq is the hackathon's provided inference stack. Add a key to `.env` to enable LLM question
-classification and report writing:
+Gemini writes classification and Tier 1 prose. Add a key to `.env`:
 
 ```dotenv
-GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.3-70b-versatile
+GEMINI_API_KEY=...
 ```
 
-Everything still runs without it. `GET /capabilities` reports which path is active. The LLM cannot
-widen the set of task types the agent serves, and cannot authorise a purchase.
+Cascade (one attempt each): `gemini-2.5-flash` → `gemini-2.5-pro` → `gemini-1.5-flash`. Everything still runs without a key. `GET /capabilities` reports which path is active. The LLM cannot widen the set of task types the agent serves, and cannot authorise a purchase.
 
 ### Tests vs live payment
 
 ```bash
-make test      # mocked; never spends Testnet XRP
-make pay-once  # one real 1200-drop Testnet payment (needs .env + running premium provider, or run after make dev-start)
+make test          # mocked; never spends Testnet XRP; no Gemini calls
+make pay-once      # one real 1200-drop Testnet payment against /api/b2b/satellite-logistics
 ```
 
 Purchase idempotency is **process-local** (`run_id + provider_id` in memory: NOT_STARTED / PENDING / SUCCESS / FAILED / UNKNOWN). Restarting the orchestrator clears it. No database. `UNKNOWN` means the client failed after a transaction may already have been submitted; the same run will not pay again.
+
+Replay mode uses the recorded hashes in [`providers_data.py`](providers_data.py) (`OFFLINE_REPLAY_SETTLEMENTS`) and never calls `purchase_premium`.
 
 ### If something fails
 
@@ -163,12 +159,12 @@ Purchase idempotency is **process-local** (`run_id + provider_id` in memory: NOT
 | `Python 3.11+ is required` | Use a 3.11+ `python3` (see Prerequisites) |
 | `XRPL wallet configuration missing` | `.env` is missing, or `XRPL_WALLET_SEED` / `XRPL_PAY_TO` are empty. Re-run `make wallet-setup` and paste the two lines |
 | Faucet / wallet-setup error | Testnet faucet flakes. Wait a minute and run `make wallet-setup` again |
-| Port already in use | Stop the old `make dev-start` (Ctrl+C) or kill whatever is on 8000–8003 / 8501 |
+| Port already in use | Stop the old `make dev-start` (Ctrl+C) or kill whatever is on 8000 / 8001 / 8501 |
 | UI error / 402 after a restart | Confirm `make dev-start` is still running and `.env` still has the seed |
 
 ### Remaining work
 
-The agentic loop, ranking, audit anchor, ODRL and dashboard are in. What is still open:
+The agentic loop, two-sided marketplace, ranking, audit anchor, ODRL and dashboard are in. What is still open:
 
 - **More than one task type.** `port_congestion` is the only spec in [ledger402/tasks.py](ledger402/tasks.py). Adding private credit or supply-chain tasks is now a matter of declaring signals and providers, not changing the graph.
 - **Persistence.** Purchase idempotency is process-local and dies on orchestrator restart. A run store is needed before the loop can survive a crash mid-purchase.

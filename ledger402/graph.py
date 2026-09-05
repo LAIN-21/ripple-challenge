@@ -30,6 +30,9 @@ import requests
 from langgraph.graph import END, StateGraph
 
 from ledger402 import audit, classify, confidence as conf, payment, providers, ranking, synthesis, tasks
+from ledger402 import bundle as bundle_mod
+from ledger402 import marketplace
+from ledger402 import replay as replay_mod
 from ledger402.confidence import EvidenceItem
 from ledger402.tasks import TaskSpec
 
@@ -70,12 +73,15 @@ class AgentState(TypedDict, total=False):
     purchased_ids: list[str]
 
     report: dict[str, Any]
+    data_bundle: dict[str, Any]
     audit_anchor: dict[str, Any]
     event_log: list[dict[str, Any]]
 
     error: str | None
     status_code: int
     stop_reason: str | None
+    delivery_tier: str
+    replay: bool
 
     # A misconfiguration that no further iteration can fix (missing wallet, unresolvable
     # provider URL). Kept separate from stop_reason so a later ranking message cannot
@@ -136,9 +142,35 @@ def understand(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _remote_catalog(task_type: str) -> list[dict[str, Any]] | None:
+    base = (
+        os.getenv("PROVIDER_URL")
+        or os.getenv("B2C_PROVIDER_URL")
+        or os.getenv("FREE_PROVIDER_URL")
+        or ""
+    ).rstrip("/")
+    if not base:
+        return None
+    try:
+        response = requests.get(f"{base}/catalog", timeout=2.0)
+        response.raise_for_status()
+        body = response.json()
+        rows = body if isinstance(body, list) else (body.get("providers") if isinstance(body, dict) else None)
+        if not isinstance(rows, list) or not rows:
+            return None
+        if not all(isinstance(row, dict) and row.get("id") for row in rows):
+            return None
+        return [row for row in rows if not row.get("category") or row.get("category") == task_type]
+    except Exception:
+        return None
+
+
 def discover(state: AgentState) -> dict[str, Any]:
-    """Find providers serving this task. A real x402 directory would plug in here."""
-    catalog = providers.providers_for_category(state["task_type"])
+    """Find providers serving this task. A live gateway catalog is preferred."""
+    catalog = None
+    if not state.get("replay"):
+        catalog = _remote_catalog(state["task_type"])
+    catalog = catalog or providers.providers_for_category(state["task_type"])
     audit.add(
         state["event_log"],
         "PROVIDERS_DISCOVERED",
@@ -169,10 +201,13 @@ def gather_public(state: AgentState) -> dict[str, Any]:
         if provider.get("payment_required"):
             continue
         try:
-            url = providers.resolve_url(provider)
-            response = requests.get(url, timeout=PUBLIC_FETCH_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            payload = response.json()
+            if state.get("replay"):
+                payload = providers.flatten_payload(str(provider.get("id")))
+            else:
+                url = providers.resolve_url(provider)
+                response = requests.get(url, timeout=PUBLIC_FETCH_TIMEOUT_SECONDS)
+                response.raise_for_status()
+                payload = response.json()
         except Exception as exc:
             # A public source being down is not fatal; the agent can still buy evidence.
             audit.add(
@@ -290,6 +325,7 @@ def procure(state: AgentState) -> dict[str, Any]:
         return {"stop_reason": "Selected provider vanished from the catalog."}
 
     price = int(provider.get("price_drops") or 0)
+    pay_to = str(provider.get("pay_to") or os.getenv("XRPL_PAY_TO") or "")
     purchases = list(state.get("purchases") or [])
     purchased_ids = list(state.get("purchased_ids") or [])
     evidence = list(state.get("evidence") or [])
@@ -306,6 +342,52 @@ def procure(state: AgentState) -> dict[str, Any]:
         # Mark it purchased either way so a failed provider is not retried in a loop.
         purchased_ids.append(str(provider.get("id")))
         return entry
+
+    if state.get("replay"):
+        successful_so_far = len(
+            [p for p in purchases if p.get("status") == payment.SUCCESS]
+        )
+        replayed = replay_mod.replay_purchase(
+            provider,
+            index=successful_so_far,
+            target_confidence=float(state.get("target_confidence") or 0),
+        )
+        audit.add(log, "HTTP_402_OBSERVED", status_code=402, note="Replay: recorded 402.")
+        audit.add(log, "X402_PAYMENT_NEGOTIATION_STARTED", url=str(provider.get("path")))
+        tx = replayed["tx_hash"]
+        record(
+            payment.SUCCESS,
+            transaction_hash=tx,
+            explorer_url=replayed.get("explorer_url"),
+            replay=True,
+        )
+        audit.add(
+            log,
+            "XRPL_PAYMENT_CONFIRMED",
+            tx_hash=tx,
+            price_drops=price,
+            explorer=replayed.get("explorer_url"),
+            replay=True,
+        )
+        audit.add(log, "PREMIUM_RESOURCE_UNLOCKED", status_code=200, replay=True)
+        evidence.append(
+            EvidenceItem(
+                provider_id=str(provider.get("id")),
+                provider_name=str(provider.get("name")),
+                payload=replayed["body"],
+                paid=True,
+                price_drops=price,
+            )
+        )
+        if str(provider.get("id", "")).startswith("b2c_"):
+            marketplace.credit_royalty(str(provider.get("id")), drops=price, tx_hash=tx)
+        return {
+            "purchases": purchases,
+            "purchased_ids": purchased_ids,
+            "evidence": evidence,
+            "spent_drops": int(state.get("spent_drops") or 0) + price,
+            "remaining_budget_drops": int(state["remaining_budget_drops"]) - price,
+        }
 
     try:
         payment.require_wallet_env()
@@ -329,6 +411,7 @@ def procure(state: AgentState) -> dict[str, Any]:
             provider_id=str(provider.get("id")),
             expected_drops=price,
             remaining_budget_drops=state["remaining_budget_drops"],
+            expected_pay_to=pay_to or None,
             log=log,
         )
     except Exception as exc:
@@ -383,6 +466,10 @@ def procure(state: AgentState) -> dict[str, Any]:
             price_drops=price,
         )
     )
+    if str(provider.get("id", "")).startswith("b2c_"):
+        marketplace.credit_royalty(
+            str(provider.get("id")), drops=price, tx_hash=result.tx_hash
+        )
 
     # Procurement budget only. The XRPL network fee is tracked separately and never
     # folded into the remaining budget.
@@ -396,9 +483,38 @@ def procure(state: AgentState) -> dict[str, Any]:
 
 
 def synthesize(state: AgentState) -> dict[str, Any]:
-    """Write the analyst answer from the evidence the agent holds."""
+    """Write the analyst answer, or a Tier 2 data bundle, from held evidence."""
+    evidence = state.get("evidence") or []
+    if (state.get("delivery_tier") or "tier_1") == "tier_2":
+        built = bundle_mod.build_bundle(
+            evidence,
+            purchases=state.get("purchases") or [],
+            question=state["question"],
+            subject=state.get("subject") or "the subject",
+            confidence=state.get("confidence") or 0.0,
+        )
+        audit.add(
+            state["event_log"],
+            "REPORT_SYNTHESIZED",
+            method="bundle",
+            verdict="DATA_BUNDLE",
+            confidence=state.get("confidence"),
+        )
+        return {
+            "report": {
+                "congestion_risk": "DATA_BUNDLE",
+                "summary": built["discount"],
+                "evidence": [f"{row['provider_name']}" for row in built["records"]],
+                "caveats": ["Raw verified records; no narrative synthesis."],
+                "method": "bundle",
+                "synthetic": True,
+            },
+            "data_bundle": built,
+            "dossier_summary": built["integrity_hash"],
+        }
+
     report = synthesis.synthesize(
-        state.get("evidence") or [],
+        evidence,
         question=state["question"],
         confidence=state.get("confidence") or 0.0,
         subject=state.get("subject") or "the subject",
@@ -535,6 +651,8 @@ def _initial_state(
     run_id: str | None,
     target_confidence: float | None,
     max_purchases: int | None,
+    delivery_tier: str | None = None,
+    replay: bool = False,
 ) -> AgentState:
     """Build the starting state. Shared by the blocking and streaming entry points."""
     run_id = run_id or str(uuid.uuid4())
@@ -573,6 +691,8 @@ def _initial_state(
         "status_code": 200,
         "stop_reason": None,
         "fatal_error": None,
+        "delivery_tier": "tier_2" if (delivery_tier or "").lower() in {"tier_2", "tier2", "bundle"} else "tier_1",
+        "replay": bool(replay),
     }
 
 
@@ -590,6 +710,8 @@ def run_agent(
     run_id: str | None = None,
     target_confidence: float | None = None,
     max_purchases: int | None = None,
+    delivery_tier: str | None = None,
+    replay: bool = False,
 ) -> dict[str, Any]:
     """Run one research objective end to end and return a serialisable result."""
     initial = _initial_state(
@@ -599,6 +721,8 @@ def run_agent(
         run_id=run_id,
         target_confidence=target_confidence,
         max_purchases=max_purchases,
+        delivery_tier=delivery_tier,
+        replay=replay,
     )
     final = get_graph().invoke(initial, _run_config(initial))
     return _serialize(final)
@@ -631,6 +755,8 @@ def stream_agent(
     run_id: str | None = None,
     target_confidence: float | None = None,
     max_purchases: int | None = None,
+    delivery_tier: str | None = None,
+    replay: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Run one objective, yielding each audit event as the agent produces it.
 
@@ -649,6 +775,8 @@ def stream_agent(
         run_id=run_id,
         target_confidence=target_confidence,
         max_purchases=max_purchases,
+        delivery_tier=delivery_tier,
+        replay=replay,
     )
     yield {
         "kind": "start",
@@ -778,6 +906,9 @@ def _serialize(state: AgentState) -> dict[str, Any]:
             for item in state.get("evidence") or []
         ],
         "report": state.get("report"),
+        "data_bundle": state.get("data_bundle"),
+        "delivery_tier": state.get("delivery_tier") or "tier_1",
+        "replay": bool(state.get("replay")),
         "audit_anchor": state.get("audit_anchor"),
         "event_log": state.get("event_log", []),
         "synthetic": True,
