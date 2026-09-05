@@ -4,6 +4,21 @@ from ledger402 import payment
 
 
 @pytest.fixture(autouse=True)
+def block_dotenv(monkeypatch):
+    """Prevent the repo's real .env from ever reaching a test.
+
+    apps/orchestrator/main.py (and the provider apps) call `load_dotenv(".env")` at
+    import time. That import is lazy — it happens inside whichever test first does
+    `from apps.orchestrator.main import app` — which is *after* this fixture's sibling
+    below has already cleared GROQ_API_KEY/GEMINI_API_KEY for the test. Without this,
+    load_dotenv repopulates them from the developer's real .env, and a test silently
+    makes a real network call to whatever LLM is configured. Patched at the dotenv
+    module itself so it is inert regardless of import order.
+    """
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: False)
+
+
+@pytest.fixture(autouse=True)
 def provider_bases(monkeypatch):
     monkeypatch.setenv("FREE_PROVIDER_URL", "http://localhost:8001")
     monkeypatch.setenv("PREMIUM_PROVIDER_URL", "http://localhost:8002")
@@ -14,6 +29,8 @@ def provider_bases(monkeypatch):
     # The test suite must never reach an inference provider, and must exercise the
     # deterministic fallbacks that the demo depends on.
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("LEDGER402_TARGET_CONFIDENCE", raising=False)
     monkeypatch.delenv("LEDGER402_MAX_PURCHASES", raising=False)
 

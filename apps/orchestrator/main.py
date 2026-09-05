@@ -41,6 +41,7 @@ def capabilities() -> dict:
     return {
         "supported_task_types": list(tasks.SUPPORTED_TASK_TYPES),
         "llm_enabled": llm.is_enabled(),
+        "llm_provider": llm.provider_name() or None,
         "llm_model": llm.model_name() if llm.is_enabled() else None,
         "llm_role": "question classification and report writing only; never spending",
         "network": xrpl_network.current_status(),

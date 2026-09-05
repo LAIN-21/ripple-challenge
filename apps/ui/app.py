@@ -74,13 +74,14 @@ st.caption("Autonomous intelligence procurement on the XRP Ledger")
 
 capabilities = fetch_capabilities()
 if capabilities.get("llm_enabled"):
+    provider = (capabilities.get("llm_provider") or "").capitalize()
     st.caption(
-        f"Reasoning: LangGraph loop · {capabilities.get('llm_model')} for question "
-        "classification and report writing only — never for spending decisions."
+        f"Reasoning: LangGraph loop · {provider} ({capabilities.get('llm_model')}) for "
+        "question classification and report writing only — never for spending decisions."
     )
 else:
     st.caption(
-        "Reasoning: LangGraph loop, fully deterministic (no GROQ_API_KEY set). "
+        "Reasoning: LangGraph loop, fully deterministic (no GROQ_API_KEY/GEMINI_API_KEY set). "
         "Classification and report writing use rule-based fallbacks."
     )
 
