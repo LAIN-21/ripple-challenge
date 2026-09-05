@@ -47,16 +47,21 @@ trap cleanup INT TERM EXIT
 pids+=($!)
 "$PY" -m uvicorn server:app --host 127.0.0.1 --port 8001 &
 pids+=($!)
+"$PY" -m uvicorn apps.chat.main:app --host 127.0.0.1 --port 8600 &
+pids+=($!)
 "$ST" run apps/ui/app.py --server.port 8501 --server.headless true --browser.gatherUsageStats false &
 pids+=($!)
 
 echo
 echo "Ledger402 running"
 echo
-echo "Business dashboard:"
+echo "Chat (user screen):"
+echo "http://localhost:8600"
+echo
+echo "Clearinghouse (switch screen):"
 echo "http://localhost:8501"
 echo
-echo "Agent execution animation (open this on the second screen):"
+echo "Agent execution animation (unused for the chat demo):"
 echo "http://localhost:8000/live"
 echo
 echo "Orchestrator:"
@@ -67,7 +72,7 @@ echo "http://localhost:8001"
 echo
 
 sleep 2
-for url in http://127.0.0.1:8000/health http://127.0.0.1:8001/health; do
+for url in http://127.0.0.1:8000/health http://127.0.0.1:8001/health http://127.0.0.1:8600/health; do
   if ! curl -sf "$url" >/dev/null; then
     echo "Warning: $url is not reachable yet."
   fi

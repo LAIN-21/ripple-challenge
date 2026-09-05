@@ -1,6 +1,6 @@
 import pytest
 
-from ledger402 import marketplace, payment
+from ledger402 import marketplace, payment, run_bus
 from server import reset_consumed_hashes
 
 
@@ -33,10 +33,12 @@ def clean_payment_cache():
     payment.reset_cache()
     marketplace.reset()
     reset_consumed_hashes()
+    run_bus.reset()
     yield
     payment.reset_cache()
     marketplace.reset()
     reset_consumed_hashes()
+    run_bus.reset()
 
 
 SATELLITE_BODY = {
