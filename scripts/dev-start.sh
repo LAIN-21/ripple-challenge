@@ -44,14 +44,19 @@ pids+=($!)
 pids+=($!)
 "$PY" -m uvicorn apps.premium_provider.main:app --host 127.0.0.1 --port 8002 &
 pids+=($!)
+"$PY" -m uvicorn apps.telemetry_provider.main:app --host 127.0.0.1 --port 8003 &
+pids+=($!)
 "$ST" run apps/ui/app.py --server.port 8501 --server.headless true --browser.gatherUsageStats false &
 pids+=($!)
 
 echo
 echo "Ledger402 running"
 echo
-echo "UI:"
+echo "Business dashboard:"
 echo "http://localhost:8501"
+echo
+echo "Agent execution animation (open this on the second screen):"
+echo "http://localhost:8000/live"
 echo
 echo "Orchestrator:"
 echo "http://localhost:8000"
@@ -59,12 +64,15 @@ echo
 echo "Free Provider:"
 echo "http://localhost:8001"
 echo
-echo "Premium Provider:"
+echo "Premium Provider (satellite, 1200 drops):"
 echo "http://localhost:8002"
+echo
+echo "Telemetry Provider (terminal ops, 600 drops):"
+echo "http://localhost:8003"
 echo
 
 sleep 2
-for url in http://127.0.0.1:8000/health http://127.0.0.1:8001/health http://127.0.0.1:8002/health; do
+for url in http://127.0.0.1:8000/health http://127.0.0.1:8001/health http://127.0.0.1:8002/health http://127.0.0.1:8003/health; do
   if ! curl -sf "$url" >/dev/null; then
     echo "Warning: $url is not reachable yet."
   fi

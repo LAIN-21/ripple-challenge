@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledger402 — Agent Execution</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #131a30;
+    --panel-2: #1a2340;
+    --line: #2a3557;
+    --text: #e8ecf8;
+    --muted: #8f9dc4;
+    --idle: #2a3557;
+    --active: #38bdf8;
+    --done: #34d399;
+    --money: #fbbf24;
+    --bad: #f87171;
+    --font: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--font); font-size: 15px; line-height: 1.45;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 19px; letter-spacing: .3px; }
+  header .tag {
+    font-size: 12px; color: var(--muted); border: 1px solid var(--line);
+    padding: 3px 9px; border-radius: 999px;
+  }
+  .controls { display: flex; gap: 10px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+  .controls label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  .controls input {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 6px 9px; font-size: 13px; font-family: var(--font);
+  }
+  .controls input[type=text] { width: 330px; }
+  .controls input[type=number] { width: 92px; }
+  button {
+    background: var(--active); color: #05203a; border: 0; border-radius: 8px;
+    padding: 9px 20px; font-weight: 700; font-size: 14px; cursor: pointer; font-family: var(--font);
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  main { display: grid; grid-template-columns: 460px 1fr; gap: 18px; padding: 18px 22px; align-items: start; }
+  @media (max-width: 1200px) { main { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel h2 {
+    margin: 0 0 12px; font-size: 11px; letter-spacing: 1.4px;
+    text-transform: uppercase; color: var(--muted); font-weight: 700;
+  }
+
+  /* ---- graph ---- */
+  .node rect { fill: var(--panel-2); stroke: var(--idle); stroke-width: 2; transition: all .35s ease; }
+  .node text { fill: var(--muted); font-size: 13px; font-family: var(--mono); transition: fill .35s ease; }
+  .node.visited rect { stroke: var(--done); fill: #12251f; }
+  .node.visited text { fill: var(--done); }
+  .node.active rect {
+    stroke: var(--active); fill: #0d2b3f; stroke-width: 3;
+    filter: drop-shadow(0 0 12px rgba(56,189,248,.65));
+  }
+  .node.active text { fill: #fff; }
+  .node.money rect {
+    stroke: var(--money); fill: #33260a; stroke-width: 3;
+    filter: drop-shadow(0 0 16px rgba(251,191,36,.7));
+  }
+  .node.money text { fill: var(--money); }
+  .edge { stroke: var(--idle); stroke-width: 2; fill: none; transition: stroke .35s ease; marker-end: url(#arrow); }
+  .edge.lit { stroke: var(--active); marker-end: url(#arrow-lit); }
+  .edge.cycle { stroke-dasharray: 5 4; }
+  .edge-label { fill: var(--muted); font-size: 10px; font-family: var(--mono); }
+
+  /* ---- narration ---- */
+  #narration {
+    min-height: 76px; padding: 14px 16px; border-radius: 10px;
+    background: var(--panel-2); border-left: 4px solid var(--active);
+  }
+  #narration.money { border-left-color: var(--money); }
+  #narration.bad { border-left-color: var(--bad); }
+  #narration .what { font-size: 17px; font-weight: 650; margin-bottom: 4px; }
+  #narration .why { font-size: 13px; color: var(--muted); }
+
+  /* ---- gauges ---- */
+  .gauge { margin-bottom: 16px; }
+  .gauge-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .gauge-head .name { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; }
+  .gauge-head .val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .track { position: relative; height: 12px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; transition: width .6s cubic-bezier(.4,0,.2,1); }
+  .fill.conf { background: linear-gradient(90deg, #0ea5e9, var(--done)); }
+  .fill.budget { background: linear-gradient(90deg, var(--money), #f97316); }
+  .target-marker {
+    position: absolute; top: -4px; width: 2px; height: 20px; background: #fff;
+    transition: left .4s ease;
+  }
+  .target-marker::after {
+    content: "target"; position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
+    font-size: 9px; color: var(--muted); font-family: var(--mono);
+  }
+  .gauge .sub { font-size: 11px; color: var(--muted); margin-top: 5px; font-family: var(--mono); }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+  .stat { background: var(--panel-2); border-radius: 9px; padding: 9px 11px; }
+  .stat .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; }
+  .stat .v { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* ---- ranking ---- */
+  .cand {
+    border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin-bottom: 8px;
+    background: var(--panel-2); transition: all .35s ease;
+  }
+  .cand.win { border-color: var(--money); background: #2a2109; }
+  .cand.out { opacity: .5; }
+  .cand-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .cand .nm { font-weight: 650; font-size: 14px; }
+  .cand .pr { font-family: var(--mono); font-size: 13px; color: var(--money); white-space: nowrap; }
+  .cand .metrics { display: flex; gap: 16px; margin-top: 5px; font-family: var(--mono); font-size: 11px; }
+  .cand .metrics b { color: var(--done); font-weight: 700; }
+  .cand .rsn { font-size: 11px; color: var(--muted); margin-top: 5px; }
+  .verdict { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+  .verdict.buy { color: var(--money); }
+  .verdict.skip { color: var(--muted); }
+
+  /* ---- settlements ---- */
+  .settle {
+    border: 1px solid var(--money); background: #2a2109; border-radius: 9px;
+    padding: 10px 12px; margin-bottom: 8px; animation: pop .45s ease;
+  }
+  @keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(.97); } }
+  .settle .nm { font-weight: 650; font-size: 13px; }
+  .settle .hash { font-family: var(--mono); font-size: 11px; color: var(--money); word-break: break-all; margin-top: 3px; }
+  .settle a { color: var(--active); font-size: 11px; }
+
+  /* ---- log ---- */
+  #log {
+    font-family: var(--mono); font-size: 12px; max-height: 280px; overflow-y: auto;
+    background: #060a16; border-radius: 9px; padding: 10px 12px;
+  }
+  #log .row { padding: 2px 0; display: flex; gap: 9px; animation: slide .3s ease; }
+  @keyframes slide { from { opacity: 0; transform: translateX(-8px); } }
+  #log .ts { color: #4c5b85; flex-shrink: 0; }
+  #log .ty { flex-shrink: 0; }
+  #log .row.money .ty { color: var(--money); }
+  #log .row.bad .ty { color: var(--bad); }
+  #log .row .ty { color: var(--active); }
+  #log .dt { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .right-col { display: grid; gap: 18px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+  .empty { color: var(--muted); font-size: 13px; font-style: italic; }
+  #status { font-size: 12px; font-family: var(--mono); color: var(--muted); }
+  #status.run { color: var(--active); }
+  #status.done { color: var(--done); }
+  #status.err { color: var(--bad); }
+
+  #final { display: none; }
+  #final.show { display: block; }
+  #final .verdict-big { font-size: 26px; font-weight: 750; margin-bottom: 6px; }
+  #final .anchor { font-family: var(--mono); font-size: 11px; color: var(--money); word-break: break-all; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Ledger402</h1>
+  <span class="tag">Agent execution — live</span>
+  <span id="status">idle</span>
+  <div class="controls">
+    <label>Objective
+      <input type="text" id="q" value="Assess whether Port X is becoming congested.">
+    </label>
+    <label>Budget (drops)
+      <input type="number" id="budget" value="5000" step="100" min="0">
+    </label>
+    <label>Target confidence
+      <input type="number" id="target" value="0.85" step="0.01" min="0" max="1">
+    </label>
+    <label>Max settlements
+      <input type="number" id="cap" value="3" step="1" min="0" max="5">
+    </label>
+    <button id="run">Run agent</button>
+  </div>
+</header>
+
+<main>
+  <!-- ============ left: the graph ============ -->
+  <div class="panel">
+    <h2>Decision graph</h2>
+    <svg id="graph" viewBox="0 0 430 600" style="width:100%;height:auto">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#2a3557"/>
+        </marker>
+        <marker id="arrow-lit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/>
+        </marker>
+      </defs>
+
+      <!-- edges -->
+      <path class="edge" data-edge="understand-discover"      d="M150,72 L150,100"/>
+      <path class="edge" data-edge="discover-gather_public"   d="M150,146 L150,174"/>
+      <path class="edge" data-edge="gather_public-assess"     d="M150,220 L150,252"/>
+      <path class="edge" data-edge="assess-rank"              d="M150,298 L150,340"/>
+      <path class="edge" data-edge="rank-procure"             d="M150,386 L150,428"/>
+      <!-- the cycle: procure back up to assess -->
+      <path class="edge cycle" data-edge="procure-assess"     d="M96,451 L40,451 L40,275 L94,275"/>
+      <!-- exits to the right -->
+      <path class="edge" data-edge="assess-synthesize"        d="M206,275 L300,275 L300,320"/>
+      <path class="edge" data-edge="rank-synthesize"          d="M206,363 L300,363"/>
+      <path class="edge" data-edge="synthesize-anchor"        d="M330,386 L330,428"/>
+      <!-- exception path: a misconfiguration aborts procurement instead of looping -->
+      <path class="edge cycle" data-edge="procure-synthesize" d="M206,451 L238,451 L238,404 L282,404 L282,370"/>
+
+      <text class="edge-label" x="8"   y="365" transform="rotate(-90 8 365)">buy again</text>
+      <text class="edge-label" x="228" y="268">target met</text>
+      <text class="edge-label" x="212" y="357">nothing worth buying</text>
+
+      <!-- nodes -->
+      <g class="node" data-node="understand">
+        <rect x="94" y="26" width="112" height="46" rx="9"/>
+        <text x="150" y="54" text-anchor="middle">understand</text>
+      </g>
+      <g class="node" data-node="discover">
+        <rect x="94" y="100" width="112" height="46" rx="9"/>
+        <text x="150" y="128" text-anchor="middle">discover</text>
+      </g>
+      <g class="node" data-node="gather_public">
+        <rect x="82" y="174" width="136" height="46" rx="9"/>
+        <text x="150" y="202" text-anchor="middle">gather_public</text>
+      </g>
+      <g class="node" data-node="assess">
+        <rect x="94" y="252" width="112" height="46" rx="9"/>
+        <text x="150" y="280" text-anchor="middle">assess</text>
+      </g>
+      <g class="node" data-node="rank">
+        <rect x="94" y="340" width="112" height="46" rx="9"/>
+        <text x="150" y="368" text-anchor="middle">rank</text>
+      </g>
+      <g class="node" data-node="procure">
+        <rect x="94" y="428" width="112" height="46" rx="9"/>
+        <text x="150" y="456" text-anchor="middle">procure</text>
+      </g>
+      <g class="node" data-node="synthesize">
+        <rect x="266" y="320" width="128" height="46" rx="9"/>
+        <text x="330" y="348" text-anchor="middle">synthesize</text>
+      </g>
+      <g class="node" data-node="anchor">
+        <rect x="274" y="428" width="112" height="46" rx="9"/>
+        <text x="330" y="456" text-anchor="middle">anchor</text>
+      </g>
+
+      <text class="edge-label" x="150" y="530" text-anchor="middle" fill="#8f9dc4">
+        procure → assess → rank → procure is the loop
+      </text>
+      <text class="edge-label" x="150" y="550" text-anchor="middle" fill="#8f9dc4">
+        the agent re-measures uncertainty after every purchase
+      </text>
+      <text class="edge-label" x="150" y="576" text-anchor="middle" fill="#fbbf24">
+        gold = real money moving on the XRP Ledger
+      </text>
+    </svg>
+
+    <div id="narration" style="margin-top:14px">
+      <div class="what">Ready</div>
+      <div class="why">Press “Run agent” to start a procurement run.</div>
+    </div>
+  </div>
+
+  <!-- ============ right: state ============ -->
+  <div class="right-col">
+    <div class="two-col">
+      <div class="panel">
+        <h2>Uncertainty &amp; budget</h2>
+
+        <div class="gauge">
+          <div class="gauge-head">
+            <span class="name">Confidence</span>
+            <span class="val" id="confVal">—</span>
+          </div>
+          <div class="track">
+            <div class="fill conf" id="confFill" style="width:0%"></div>
+            <div class="target-marker" id="targetMark" style="left:85%"></div>
+          </div>
+          <div class="sub" id="confSub">waiting for first assessment</div>
+        </div>
+
+        <div class="gauge">
+          <div class="gauge-head">
+            <span class="name">Procurement budget</span>
+            <span class="val" id="budVal">—</span>
+          </div>
+          <div class="track">
+            <div class="fill budget" id="budFill" style="width:100%"></div>
+          </div>
+          <div class="sub" id="budSub">nothing spent</div>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><div class="k">Loop</div><div class="v" id="iterVal">0</div></div>
+          <div class="stat"><div class="k">Settled</div><div class="v" id="setVal">0</div></div>
+          <div class="stat"><div class="k">Evidence</div><div class="v" id="evVal">0</div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Settlements on XRPL</h2>
+        <div id="settlements"><div class="empty">No payment yet.</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Ranking — confidence bought per drop</h2>
+      <div id="ranking"><div class="empty">The agent has not compared providers yet.</div></div>
+    </div>
+
+    <div class="panel" id="final">
+      <h2>Result</h2>
+      <div class="verdict-big" id="finalVerdict"></div>
+      <div id="finalSummary" style="color:var(--muted);margin-bottom:10px"></div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:3px">AUDIT ANCHOR (SHA-256)</div>
+      <div class="anchor" id="finalAnchor"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Execution log</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+// Which graph node each audit event belongs to. Keeping this here (rather than on the
+// server) lets the animation stay a pure view over the agent's own vocabulary.
+const NODE_OF = {
+  RESEARCH_REQUEST_UNDERSTOOD: "understand",
+  TASK_REJECTED:               "understand",
+  PROVIDERS_DISCOVERED:        "discover",
+  PUBLIC_SOURCE_QUERIED:       "gather_public",
+  PUBLIC_SOURCE_UNAVAILABLE:   "gather_public",
+  CONFIDENCE_ASSESSED:         "assess",
+  OBJECTIVE_MET:               "assess",
+  PURCHASE_CEILING_REACHED:    "assess",
+  BUDGET_EXHAUSTED:            "assess",
+  PROVIDERS_RANKED:            "rank",
+  PURCHASE_APPROVED:           "rank",
+  HTTP_402_OBSERVED:           "procure",
+  X402_PAYMENT_NEGOTIATION_STARTED: "procure",
+  XRPL_PAYMENT_CONFIRMED:      "procure",
+  PREMIUM_RESOURCE_UNLOCKED:   "procure",
+  PROCUREMENT_FAILED:          "procure",
+  PROCUREMENT_ABORTED:         "procure",
+  REPORT_SYNTHESIZED:          "synthesize",
+  AUDIT_ANCHOR_COMPUTED:       "anchor",
+};
+
+// Events where real value moves. These get the gold treatment.
+const MONEY = new Set([
+  "HTTP_402_OBSERVED", "X402_PAYMENT_NEGOTIATION_STARTED",
+  "XRPL_PAYMENT_CONFIRMED", "PREMIUM_RESOURCE_UNLOCKED",
+]);
+const BAD = new Set(["TASK_REJECTED", "PROCUREMENT_FAILED", "PROCUREMENT_ABORTED", "PUBLIC_SOURCE_UNAVAILABLE"]);
+
+const pct = v => `${(Number(v) * 100).toFixed(0)}%`;
+const pct1 = v => `${(Number(v) * 100).toFixed(1)}%`;
+const $ = id => document.getElementById(id);
+
+/**
+ * What each step means, in the language of the business, not the code.
+ * `d` is the event detail; `s` the progress snapshot.
+ */
+function narrate(type, d, s) {
+  switch (type) {
+    case "RESEARCH_REQUEST_UNDERSTOOD":
+      return [`Objective understood: ${d.task_type}`,
+        `Subject: ${d.subject || "—"}. Classified by ${d.method === "llm" ? "the LLM" : "the deterministic rule"}. ` +
+        `The LLM only reads the question — it never authorises a purchase.`];
+    case "TASK_REJECTED":
+      return [`Rejected — failing closed`, d.reason || "Unsupported objective."];
+    case "PROVIDERS_DISCOVERED":
+      return [`Discovered ${d.count} providers`,
+        (d.providers || []).map(p => `${p.name} (${p.payment_required ? p.price_drops + " drops" : "free"})`).join(" · ")];
+    case "PUBLIC_SOURCE_QUERIED":
+      return [`Free evidence collected first`,
+        `${d.provider_id} supplied ${(d.signals || []).length} signals at no cost. ` +
+        `Buying what a free source already gives is the easiest way to waste money.`];
+    case "PUBLIC_SOURCE_UNAVAILABLE":
+      return [`Public source unavailable`, `${d.provider_id}: ${d.reason}. The run continues on paid evidence.`];
+    case "CONFIDENCE_ASSESSED":
+      return [`Confidence measured: ${pct1(d.confidence)}`,
+        d.uncertainty_gap > 0
+          ? `Target is ${pct(d.target)}. Gap of ${pct1(d.uncertainty_gap)} remains across ${d.sources} source(s) — the agent must decide whether closing it is worth paying for.`
+          : `Target of ${pct(d.target)} is met from ${d.sources} source(s). No further purchase is justified.`];
+    case "PROVIDERS_RANKED":
+      return [`Providers compared`,
+        `Ranked on confidence bought per drop, not on price. ` +
+        (d.selected ? `Selected: ${d.selected}.` : `Nothing left is worth its price.`)];
+    case "PURCHASE_APPROVED":
+      return [`Spending policy approved — ${d.price_drops} drops`, d.reason];
+    case "HTTP_402_OBSERVED":
+      return [`HTTP 402 Payment Required`,
+        `The provider refused the unpaid request with a real 402 and quoted its terms. This is the x402 handshake, not a simulation.`];
+    case "X402_PAYMENT_NEGOTIATION_STARTED":
+      return [`Paying over x402`,
+        `The buyer wallet signs and submits an XRPL payment. The quoted terms are checked against what the agent expected before anything is signed.`];
+    case "XRPL_PAYMENT_CONFIRMED":
+      return [`Settled on the XRP Ledger`,
+        `Transaction ${(d.tx_hash || "").slice(0, 24)}… confirmed` + (d.network_fee_drops != null ? ` · network fee ${d.network_fee_drops} drops (tracked separately from the budget)` : "")];
+    case "PREMIUM_RESOURCE_UNLOCKED":
+      return [`Paid intelligence unlocked`, `HTTP 200 with the data and its ODRL usage rights, in the same exchange that settled the payment.`];
+    case "PROCUREMENT_FAILED":
+      return [`Purchase failed — ${d.state || ""}`, `${d.reason || ""} The agent will not retry this provider in the same run.`];
+    case "PROCUREMENT_ABORTED":
+      return [`Procurement aborted`, d.reason || "Configuration error."];
+    case "OBJECTIVE_MET":
+      return [`Objective met at ${pct1(d.confidence)}`, `Target was ${pct(d.target)}. The agent stops buying — spending more would add nothing.`];
+    case "PURCHASE_CEILING_REACHED":
+      return [`Settlement ceiling reached`, `Capped at ${d.max_purchases} settlement(s) per run. A safety rail independent of the budget.`];
+    case "BUDGET_EXHAUSTED":
+      return [`Procurement budget exhausted`, `The agent answers with the evidence it could afford.`];
+    case "REPORT_SYNTHESIZED":
+      return [`Report written — ${d.verdict}`,
+        `Grounded strictly in the evidence held, by ${d.method === "llm" ? "the LLM" : "the deterministic template"}. No claim without a source that was fetched or paid for.`];
+    case "AUDIT_ANCHOR_COMPUTED":
+      return [`Audit anchor committed`,
+        `SHA-256 over the report, the XOR-folded settlement hashes and the timestamp. ${d.settlement_count} settlement(s) folded in — an auditor can verify each on the Testnet.`];
+    default:
+      return [type, ""];
+  }
+}
+
+// ---------------------------------------------------------------- graph painting
+
+let lastNode = null;
+function paintNode(node, isMoney) {
+  if (!node) return;
+  document.querySelectorAll(".node").forEach(n => n.classList.remove("active", "money"));
+  if (lastNode && lastNode !== node) {
+    const prev = document.querySelector(`.node[data-node="${lastNode}"]`);
+    if (prev) prev.classList.add("visited");
+    const edge = document.querySelector(`.edge[data-edge="${lastNode}-${node}"]`);
+    if (edge) {
+      document.querySelectorAll(".edge").forEach(e => e.classList.remove("lit"));
+      edge.classList.add("lit");
+    }
+  }
+  const el = document.querySelector(`.node[data-node="${node}"]`);
+  if (el) el.classList.add(isMoney ? "money" : "active");
+  lastNode = node;
+}
+
+function resetGraph() {
+  document.querySelectorAll(".node").forEach(n => n.classList.remove("active", "visited", "money"));
+  document.querySelectorAll(".edge").forEach(e => e.classList.remove("lit"));
+  lastNode = null;
+}
+
+// ---------------------------------------------------------------- panel updates
+
+function updateGauges(s) {
+  if (!s) return;
+  const conf = Number(s.confidence || 0);
+  const target = Number(s.target_confidence || 0);
+  $("confVal").textContent = conf > 0 ? pct1(conf) : "—";
+  $("confFill").style.width = `${Math.min(100, conf * 100)}%`;
+  $("targetMark").style.left = `${Math.min(100, target * 100)}%`;
+  if (conf > 0) {
+    const gap = Math.max(0, target - conf);
+    $("confSub").textContent = gap > 0
+      ? `${pct1(gap)} short of the ${pct(target)} target`
+      : `target of ${pct(target)} reached`;
+  }
+
+  const budget = Number(s.budget_drops || 0);
+  const spent = Number(s.spent_drops || 0);
+  const remaining = Number(s.remaining_budget_drops || 0);
+  $("budVal").textContent = `${remaining} drops`;
+  $("budFill").style.width = budget > 0 ? `${(remaining / budget) * 100}%` : "0%";
+  $("budSub").textContent = spent > 0
+    ? `spent ${spent} drops (${(spent / 1e6).toFixed(4)} XRP) of ${budget}`
+    : `nothing spent of ${budget} drops`;
+
+  $("iterVal").textContent = s.iterations || 0;
+  $("setVal").textContent = s.settlement_count || 0;
+  $("evVal").textContent = s.evidence_count || 0;
+}
+
+function renderRanking(round) {
+  if (!round || !round.candidates || !round.candidates.length) return;
+  const host = $("ranking");
+  host.innerHTML = "";
+  round.candidates.forEach(c => {
+    const won = c.provider_id === round.selected;
+    const div = document.createElement("div");
+    div.className = `cand ${won ? "win" : c.eligible ? "" : "out"}`;
+    div.innerHTML = `
+      <div class="cand-top">
+        <span class="nm">${c.provider_name}</span>
+        <span class="pr">${c.price_drops} drops</span>
+      </div>
+      <div class="metrics">
+        <span>gain <b>${(c.marginal_confidence_gain * 100).toFixed(1)}pts</b></span>
+        <span>per 1k drops <b>${Number(c.confidence_per_1000_drops).toFixed(2)}</b></span>
+        <span class="verdict ${won ? "buy" : "skip"}">${won ? "▸ buying" : "skip"}</span>
+      </div>
+      <div class="rsn">${c.reason}</div>`;
+    host.appendChild(div);
+  });
+}
+
+let settlementsShown = 0;
+function addSettlement(d) {
+  const host = $("settlements");
+  if (settlementsShown === 0) host.innerHTML = "";
+  settlementsShown += 1;
+  const hash = d.tx_hash || "";
+  const div = document.createElement("div");
+  div.className = "settle";
+  div.innerHTML = `
+    <div class="nm">Settlement #${settlementsShown}</div>
+    <div class="hash">${hash}</div>
+    ${d.explorer ? `<a href="${d.explorer}" target="_blank" rel="noreferrer">Open on Testnet explorer →</a>` : ""}`;
+  host.appendChild(div);
+}
+
+function addLogRow(ev) {
+  const row = document.createElement("div");
+  const type = ev.type || "";
+  row.className = "row" + (MONEY.has(type) ? " money" : BAD.has(type) ? " bad" : "");
+  const ts = (ev.at || "").slice(11, 19);
+  let detail = "";
+  try { detail = JSON.stringify(ev.detail || {}); } catch { detail = ""; }
+  row.innerHTML = `<span class="ts">${ts}</span><span class="ty">${type}</span><span class="dt">${detail.slice(0, 160)}</span>`;
+  const log = $("log");
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function showFinal(result) {
+  const report = result.report || {};
+  const anchor = result.audit_anchor || {};
+  $("finalVerdict").textContent = report.congestion_risk || "—";
+  $("finalSummary").textContent = report.summary || "";
+  $("finalAnchor").textContent = anchor.audit_hash || "—";
+  $("final").classList.add("show");
+}
+
+// ------------------------------------------------------- paced playback
+
+// The agent can emit several events inside one graph step, and a mocked payment run
+// finishes in milliseconds. Events are queued and played at a readable pace, speeding up
+// when the backlog grows so the animation never drifts far behind the real agent.
+const queue = [];
+let draining = false;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function enqueue(msg) {
+  queue.push(msg);
+  if (!draining) drain();
+}
+
+async function drain() {
+  draining = true;
+  while (queue.length) {
+    render(queue.shift());
+    const backlog = queue.length;
+    const delay = backlog > 12 ? 70 : backlog > 6 ? 180 : backlog > 2 ? 340 : 550;
+    await sleep(delay);
+  }
+  draining = false;
+}
+
+function render(msg) {
+  if (msg.kind === "event") {
+    const ev = msg.event || {};
+    const type = ev.type || "";
+    const detail = ev.detail || {};
+    const isMoney = MONEY.has(type);
+
+    paintNode(NODE_OF[type], isMoney);
+
+    const [what, why] = narrate(type, detail, msg.snapshot);
+    const n = $("narration");
+    n.className = isMoney ? "money" : BAD.has(type) ? "bad" : "";
+    n.querySelector(".what").textContent = what;
+    n.querySelector(".why").textContent = why;
+
+    addLogRow(ev);
+    updateGauges(msg.snapshot);
+    if (type === "PROVIDERS_RANKED" && msg.snapshot) renderRanking(msg.snapshot.latest_ranking);
+    if (type === "XRPL_PAYMENT_CONFIRMED") addSettlement(detail);
+  } else if (msg.kind === "result") {
+    showFinal(msg.result);
+    document.querySelectorAll(".node.active,.node.money").forEach(n => {
+      n.classList.remove("active", "money"); n.classList.add("visited");
+    });
+    setStatus("done", `finished · ${msg.result.settlement_count} settlement(s) · ${msg.result.spent_drops} drops`);
+  } else if (msg.kind === "error") {
+    setStatus("err", msg.reason);
+    const n = $("narration");
+    n.className = "bad";
+    n.querySelector(".what").textContent = "Run failed";
+    n.querySelector(".why").textContent = msg.reason;
+  }
+}
+
+function setStatus(cls, text) {
+  const el = $("status");
+  el.className = cls;
+  el.textContent = text;
+}
+
+// ------------------------------------------------------------------- run control
+
+let source = null;
+
+function run() {
+  if (source) source.close();
+  queue.length = 0;
+  settlementsShown = 0;
+  resetGraph();
+  $("log").innerHTML = "";
+  $("ranking").innerHTML = '<div class="empty">The agent has not compared providers yet.</div>';
+  $("settlements").innerHTML = '<div class="empty">No payment yet.</div>';
+  $("final").classList.remove("show");
+  $("run").disabled = true;
+  setStatus("run", "running…");
+
+  const params = new URLSearchParams({
+    question: $("q").value,
+    budget_drops: $("budget").value,
+    target_confidence: $("target").value,
+    max_purchases: $("cap").value,
+  });
+
+  source = new EventSource(`/research/stream?${params}`);
+  source.onmessage = e => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.kind === "start") {
+      updateGauges(msg.snapshot);
+      return;
+    }
+    enqueue(msg);
+    // The server closes the stream after the result; EventSource would otherwise
+    // reconnect and re-run the whole agent, spending real XRP a second time.
+    if (msg.kind === "result" || msg.kind === "error") {
+      source.close();
+      source = null;
+      $("run").disabled = false;
+    }
+  };
+  source.onerror = () => {
+    if (!source) return;
+    source.close();
+    source = null;
+    $("run").disabled = false;
+    setStatus("err", "stream lost — is the orchestrator running on :8000?");
+  };
+}
+
+$("run").addEventListener("click", run);
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") run(); });
+</script>
+</body>
+</html>
