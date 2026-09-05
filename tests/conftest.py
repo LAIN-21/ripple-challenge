@@ -25,6 +25,7 @@ def provider_bases(monkeypatch):
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("LEDGER402_TARGET_CONFIDENCE", raising=False)
     monkeypatch.delenv("LEDGER402_MAX_PURCHASES", raising=False)
+    monkeypatch.delenv("LEDGER402_FUNDING_ASSET", raising=False)
 
 
 @pytest.fixture(autouse=True)

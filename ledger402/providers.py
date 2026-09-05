@@ -103,7 +103,7 @@ def catalog_entry(provider_id: str, spec: dict[str, Any] | None = None) -> dict[
         "signals": list(source.get("signals") or meta.get("signals") or []),
         "description": source.get("description"),
         "license": source.get("license"),
-        "pay_to": source.get("pay_to"),
+        "pay_to": source.get("pay_to") or os.getenv("XRPL_PAY_TO"),
         "curator_address": source.get("curator_address"),
         "settlement_mode": source.get("settlement_mode"),
     }
