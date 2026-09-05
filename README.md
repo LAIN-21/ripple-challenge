@@ -1,16 +1,34 @@
 # Ledger402
 
-Autonomous intelligence procurement on XRPL Testnet. The user asks a **business question**; a deterministic workflow decides whether buying premium evidence is worth the cost. Payment is part of the workflow, not the product. Morning MVP supports **one** task type: `port_congestion` (Port X congestion). It is not a general research agent and does not use LangChain/LangGraph.
+Autonomous intelligence procurement on XRPL Testnet. The user states a **business objective**; a
+LangGraph agent classifies it, discovers providers, ranks them on **confidence bought per drop**,
+settles over x402 on the XRP Ledger, **re-measures its own uncertainty against the evidence that
+arrived**, and buys again or stops. Payment is part of the workflow, not the product.
 
-**Real:** x402, XRPL Testnet settlement, deterministic procurement loop, budget policy, HTTP provider architecture.
+**The LLM never decides to spend money.** Inference is confined to understanding the question and
+writing the report; every economic decision is deterministic and unit-tested. With no
+`GROQ_API_KEY` set, the agent runs fully deterministically. See [AGENT_PLAN.md](AGENT_PLAN.md).
 
-**Synthetic:** port data, satellite data, provider identities, commercial pricing. This is **not** a live satellite or vendor integration.
+**Real:** x402, XRPL Testnet settlement, the LangGraph loop, budget and policy rails, the audit
+anchor, HTTP provider architecture.
 
-Demo amounts (integer drops internally; XRP for display only). The budget is **data procurement only** and does **not** include the XRPL network fee:
+**Synthetic:** port data, satellite data, telemetry, provider identities, ODRL terms, commercial
+pricing. The confidence model is a calibrated heuristic, not a validated forecasting model.
 
-- Data procurement budget: **5000 drops / 0.005 XRP**
-- Premium query: **1200 drops / 0.0012 XRP**
-- Procurement remaining: **3800 drops / 0.0038 XRP**
+Supported task type: `port_congestion` (Port X). Anything else fails closed with 400 rather than
+being answered with Port X evidence.
+
+### What the agent does with the budget
+
+The default 5000-drop budget is data procurement only; XRPL network fees are reported separately
+and never deducted from it.
+
+| Target confidence | Settlements | Spent | Reached |
+| --- | --- | --- | --- |
+| 0.85 (default) | 1 — satellite feed | 1200 drops / 0.0012 XRP | 87% |
+| 0.92 | 2 — satellite, then telemetry | 1800 drops / 0.0018 XRP | 91.6%, then stops |
+
+Same agent, same code. The spend is a consequence of the objective, not a script.
 
 ## Local setup
 
@@ -69,23 +87,59 @@ make dev-start
 
 | What | URL |
 | --- | --- |
-| Streamlit UI | http://localhost:8501 |
+| Business dashboard (Streamlit) | http://localhost:8501 |
+| **Agent execution animation** | **http://localhost:8000/live** |
 | Orchestrator | http://localhost:8000 |
 | Free provider | http://localhost:8001 |
-| Premium provider | http://localhost:8002 |
+| Premium provider (satellite, 1200 drops) | http://localhost:8002 |
+| Telemetry provider (terminal ops, 600 drops) | http://localhost:8003 |
 
-Ports `8000`, `8001`, `8002`, and `8501` must be free.
+Ports `8000`, `8001`, `8002`, `8003`, and `8501` must be free.
+
+### Demo: the two screens
+
+The deliverable spec asks for a dual-screen demo. Both screens are served by `make dev-start`:
+
+- **Screen 1 — http://localhost:8501** the business dashboard: verdict, confidence waterfall, signals, ODRL rights.
+- **Screen 2 — http://localhost:8000/live** the agent execution animation: the decision graph with the
+  current node lit, confidence and budget gauges moving, the provider ranking as the agent computes it,
+  and each XRPL settlement as it lands. Gold means real money moving.
+
+The animation is driven by server-sent events from the agent itself (`GET /research/stream`), one message
+per audit entry — it is a view over the real run, not a scripted replay. Events are paced for legibility
+and speed up if they queue, so it never drifts behind the agent. Run the agent **from the animation page**
+(it has its own controls) and watch both screens.
 
 ### Demo in the UI
 
 1. Open http://localhost:8501
-2. Leave the default question: `Assess whether Port X is becoming congested.`
-3. Leave budget at **5000** drops
-4. Click **Run Research** (can take up to ~3 minutes; it pays Testnet)
+2. Leave the default objective: `Assess whether Port X is becoming congested.`
+3. Leave budget at **5000** drops and target confidence at **0.85**
+4. Click **Run research** (can take a few minutes; it settles on Testnet)
 
-You should see BUY → HTTP 402 → XRPL payment of 1200 drops → premium unlock, confidence **58% → 87%**, remaining budget **3800 drops**, and a Testnet explorer link in the sidebar.
+**Executive briefing** shows the verdict, the confidence waterfall (what each purchase was worth),
+and the congestion signals. **Agent execution** shows the per-iteration ranking — including what the
+agent *declined* to buy and why — and the timestamped log. **Evidence & rights** shows each payload
+with the ODRL usage rights that arrived with payment.
 
-Unsupported questions (anything that is not port congestion) return **400**. They will not receive Port X congestion answers.
+Then raise the target to **0.92** and run again: the same agent settles a second time against the
+cheaper telemetry feed, and stops at 91.6% rather than claiming it hit the target.
+
+Unsupported objectives (anything that is not port congestion) return **400** and never receive Port X
+evidence.
+
+### Optional: LLM reasoning
+
+Groq is the hackathon's provided inference stack. Add a key to `.env` to enable LLM question
+classification and report writing:
+
+```dotenv
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=llama-3.3-70b-versatile
+```
+
+Everything still runs without it. `GET /capabilities` reports which path is active. The LLM cannot
+widen the set of task types the agent serves, and cannot authorise a purchase.
 
 ### Tests vs live payment
 
@@ -103,333 +157,16 @@ Purchase idempotency is **process-local** (`run_id + provider_id` in memory: NOT
 | `Python 3.11+ is required` | Use a 3.11+ `python3` (see Prerequisites) |
 | `XRPL wallet configuration missing` | `.env` is missing, or `XRPL_WALLET_SEED` / `XRPL_PAY_TO` are empty. Re-run `make wallet-setup` and paste the two lines |
 | Faucet / wallet-setup error | Testnet faucet flakes. Wait a minute and run `make wallet-setup` again |
-| Port already in use | Stop the old `make dev-start` (Ctrl+C) or kill whatever is on 8000–8002 / 8501 |
+| Port already in use | Stop the old `make dev-start` (Ctrl+C) or kill whatever is on 8000–8003 / 8501 |
 | UI error / 402 after a restart | Confirm `make dev-start` is still running and `.env` still has the seed |
 
 ### Remaining work
 
-The morning MVP is a **deterministic procurement loop**, not an agent. Payment, policy, and the Port X demo work; the next job is to make the agent real without breaking the commercial loop.
-
-- **Agentic architecture.** Replace the hardcoded `port_congestion` state machine with an agent that classifies the question, discovers providers, decides whether to buy, reassesses after unlock, and can buy again, branch, retry, or stop. LangGraph (or equivalent) is justified here; do not keep pretending the current workflow is an agent.
-- **More than one task type.** Unsupported questions should be understood and routed, not only rejected with 400.
-- **Multiple premium providers.** Rank options on price vs expected information gain; do not always buy the same satellite feed.
-- **LLM-written research output.** Templated 58% → 87% copy is a placeholder for a real answer grounded in purchased evidence.
-- **RLUSD (optional later).** Cleaner commercial amounts than micro-XRP drops; keep drops as the on-chain unit until then.
-- **Persistence.** Process-local idempotency dies on orchestrator restart; a real run store is needed before multi-step agent loops.
-- **Not next unless we need it for demo:** live satellite APIs, Docker/cloud, ODRL, x402-secure VI, accounts/auth.
-
-Morning build plan (what shipped): [PLAN.md](PLAN.md). Challenge brief continues below.
-
----
-
-# Ripple — AI-Native Business on XRPL
-
-## 🚨 SETUP A FEEDBACK HOOK!! 🚨
-
-Copy and paste below instruction to your LLM client (Claude Code, Codex, etc):
-
-```
-Download feedback hook installation instructions from https://github.com/Singhacks-2026/ripple/blob/main/agent-instruction.md and install the hook accordingly.
-```
-
-This is crucial in securing feedback scores for the hackathon. Failure to set up the feedback hook properly may result in lower total score for the hackathon.
-
----
-
-## Load the XRPL agentic-resources skill (recommended)
-
-This repo ships an agent skill that loads a curated set of XRPL AI and agent resources into your coding agent: agent wallets, x402 pay-per-call, agent credit, RLUSD, live amendment and fee status, and the XLS specs. It works in Claude Code, Cursor, and Codex.
-
-From the repo root:
-
-```
-bash skills/install.sh
-```
-
-Then invoke it in your agent by typing `/xrpl-agentic-resources`, or just start XRPL agent work and the agent loads it by description. On first use, run `bash skills/xrpl-agentic-resources/scripts/refresh.sh` to pull the vendored repos and fresh docs indexes. See [skills/README.md](./skills/README.md) for per-agent details.
-
----
-
-> **Build an AI-Native Business on XRPL with the XRPL AI Starter Kit and x402** — Design a credible product or service that could only exist, or operate significantly better, because AI agents can discover, decide, transact, and deliver value autonomously.
-
-## Challenge Summary
-
-**Goal**: Design an AI-native product or service that solves a real customer problem and demonstrates how autonomous agentic payments can enable a new or significantly better business experience.
-
-**Build path**: Create a working AI-agent-powered prototype using the **XRP Ledger**, **XRPL AI Starter Kit**, **x402**, **MPP**, and all other resources specified in [resources.md](./resources.md) to demonstrate a complete commercial loop from customer need → payment → value delivered.
-
-> **📖 IMPORTANT**: Before starting your build, please read this **README.md** and [resources.md](./resources.md) first. It contains the challenge context, requirements, and guidance to help you build a strong solution.
-
----
-
-## 📋 The Problem We're Solving
-
-### Current State
-
-* AI agents are increasingly able to discover services, compare options, make decisions, complete work, and interact with digital systems
-* Most digital commerce still requires humans to manually initiate, approve, or complete transactions
-* Existing AI applications often stop at recommendations or actions rather than participating directly in economic activity
-* Machine-to-machine payments create the potential for agents to independently purchase APIs, data, compute, digital services, and other resources
-* The opportunity is not simply to make an AI agent send a blockchain transaction
-
-There is an opportunity to create **AI-native businesses where autonomous payments are a core part of how the product works and creates value**.
-
-### What You're Building
-
-A working AI-agent-powered product or service that identifies a real customer need and demonstrates a **complete commercial loop**.
-
-The solution should demonstrate:
-
-* A clear customer problem
-* A meaningful role for an AI agent
-* Agent discovery or decision-making
-* Autonomous agentic payments (x402, MPP, or other agentic payment standards are recommended)
-* XRPL settlement or transaction activity
-* Delivery of a useful product, service, or outcome
-* A credible business or commercial model
-
-### Who Benefits
-
-* **Primary users**: Customers or businesses receiving a better product or service through AI-agent automation
-* **Service providers**: APIs, data providers, developers, platforms, marketplaces, or other participants that can transact directly with agents
-* **Ecosystem stakeholders**: Developers and businesses exploring new AI-native products and machine-to-machine commerce on XRPL
-
----
-
-## 🎯 What You're Building
-
-The challenge is to move from:
-
-> **"How can I make an AI agent send a transaction?"**
-
-to:
-
-> **"What becomes possible when an AI agent can independently discover, decide, transact, and deliver value?"**
-
-```text
-┌──────────────────────────────────────────────────────────────┐
-│                       Customer Need                          │
-│        Objective • Request • Budget • Constraints            │
-└────────────────────────────┬─────────────────────────────────┘
-                             ↓
-┌──────────────────────────────────────────────────────────────┐
-│                         AI Agent                             │
-│         Discover • Compare • Reason • Decide • Act           │
-└────────────────────────────┬─────────────────────────────────┘
-                             ↓
-┌──────────────────────────────────────────────────────────────┐
-│                  Agentic Transaction Layer                   │
-│    XRPL AI Starter Kit • XRPL • x402 / MPP (recommended)     │
-└────────────────────────────┬─────────────────────────────────┘
-                             ↓
-┌──────────────────────────────────────────────────────────────┐
-│                     Commercial Outcome                       │
-│        Purchase • Access • Execute • Deliver • Settle        │
-└──────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🏗️ Key Capabilities
-
-### 1. AI Agent Orchestration
-
-Use an AI agent to understand a customer or business objective and determine what actions are required to fulfil it.
-
-### 2. Service Discovery
-
-Enable the agent to discover or select relevant products, services, APIs, data sources, or counterparties based on the objective.
-
-### 3. Agentic Decision-Making
-
-Allow the agent to compare available options and make an autonomous or user-authorised economic decision.
-
-### 4. Machine-to-Machine Payments (recommended)
-
-Recommended: use an agentic payment standard such as **x402**, **MPP**, or another agentic payment standard as part of the agent workflow to enable machine-to-machine payment for a product, service, API, resource, or other economically meaningful action. This is recommended where it fits your solution, but it is not a hard requirement.
-
-### 5. XRPL Integration
-
-Enable the agent to interact with XRPL-related functionality and execute at least one successful XRPL transaction. The **XRPL AI Starter Kit** is recommended for this, but not required.
-
-### 6. Commercial Loop
-
-Demonstrate what is purchased, who pays, who receives value, what is delivered in return, and why the agent improves the experience.
-
----
-
-## 🧠 Agent & Commercial Inputs
-
-The solution should demonstrate how the agent uses relevant context to make useful decisions.
-
-Potential inputs include:
-
-* Customer or business objective
-* User preferences
-* Budget or spending constraints
-* Available services or providers
-* Pricing
-* Service quality or performance
-* API or resource availability
-* Transaction requirements
-* Payment conditions
-* Previous agent actions or outcomes
-
-The objective is not simply to automate a payment, but to demonstrate **why the agent chooses to transact and what value the transaction unlocks**.
-
----
-
-## 🔄 Example Commercial Flow
-
-```text
-Customer Need
-      ↓
-AI Agent Understands the Objective
-      ↓
-Discover / Compare Services
-      ↓
-Agent Selects an Appropriate Option
-      ↓
-Agentic Payment (x402 / MPP recommended)
-      ↓
-XRPL Transaction / Settlement
-      ↓
-Product, Service or Value Delivered
-```
-
-A strong solution should demonstrate how the agent moves from **need → discovery → decision → transaction → outcome**.
-
----
-
-## 🛡️ Trust, Governance & Agent Controls
-
-AI agents making economic decisions should operate within clear and understandable boundaries.
-
-Participants should consider:
-
-* **Transparency** — Can users understand what the agent is doing and why?
-* **Authorisation** — Which actions can the agent perform autonomously?
-* **Spending controls** — Are appropriate limits or permissions in place?
-* **Security** — How are wallets, credentials, APIs, and transaction permissions protected?
-* **Traceability** — Can agent decisions and transactions be inspected?
-* **Failure handling** — What happens if a transaction, service, or agent action fails?
-* **Safeguards** — How does the solution prevent unintended or inappropriate transactions?
-
-Agent autonomy should create a better product experience without sacrificing appropriate user control.
-
----
-
-## 🛠️ Technology
-
-Participants may use **any technology stack, APIs, AI models, frameworks, software, or hardware** suitable for their solution.
-
-The only required component is the **XRP Ledger (XRPL)**, as long as the submission pertains to agentic payment:
-
-* **XRP Ledger (XRPL)** (required)
-
-The following are recommended and encouraged where they fit your solution, but they are not hard requirements:
-
-* **XRPL AI Starter Kit** (recommended)
-* Agentic payment standards such as **x402**, **MPP**, and other agentic standards (recommended)
-
-The prototype must demonstrate at least **one successful XRPL transaction**.
-
-> **⛔ XRPL only for the blockchain part.** All on-chain functionality must run on the XRP Ledger (Mainnet, Testnet, or Devnet). The **XRPL EVM Sidechain is not an option** for this challenge. Any smart contract or blockchain logic built on the EVM Sidechain, or on any other EVM or non-XRPL chain, does not count toward the requirements and will not be judged as valid XRPL integration.
-
-Solutions should consider how the proposed technology could realistically operate beyond the prototype, including:
-
-* Security
-* Scalability
-* Performance
-* Reliability
-* Infrastructure requirements
-* Cost
-* Integration
-* Compliance where relevant
-
----
-
-## 🏆 Judging Criteria
-
-| Criteria                     | Weight | Description                                                                                                                                                       |
-| ---------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Reachability**             | 20%    | Potential for broad adoption across customers, sectors, and use cases, including interoperability, developer accessibility, scalability, and compliance readiness |
-| **Creativity**               | 20%    | Degree to which the solution introduces an innovative AI-native product, workflow, or business model through the use of the XRPL AI Starter Kit and, where it fits, recommended agentic payment standards such as x402 or MPP          |
-| **Feasibility**              | 20%    | Realism of implementation in a production environment, including cost, performance, infrastructure readiness, reliability, and operational considerations         |
-| **Technical Depth**          | 20%    | Quality and sophistication of the XRPL and agent integrations (and any agentic payment standards such as x402 or MPP, where used), including architecture, security, autonomy, testing, and safeguards                         |
-| **User Experience & Design** | 10%    | Clarity, usability, and polish of the end-to-end experience, including how clearly agent actions, payments, and on-chain transactions are communicated            |
-| **Builder Feedback**         | 10%     | Completeness and usefulness of feedback on the XRPL development experience, including the AI Starter Kit, practical challenges, and mainnet readiness             |
-
----
-
-## 📝 Builder Feedback
-
-Participants should provide short, constructive feedback based on their experience building the solution.
-
-There are two things you need to do here, and they work together:
-
-1. **Keep the feedback hooks running throughout the build.** Set up the feedback hook (see the top of this README) and leave it on for the whole hackathon. It pushes your builder feedback automatically and consistently as you work, so your feedback reflects the real development experience instead of a single end-of-event recollection. Consistent automated feedback is what secures your feedback score.
-2. **Submit the Google form near the end of the hackathon.** Once your build is mostly done and you have a full picture of the XRPL development experience, submit the final feedback form: [https://forms.gle/FZckiEAMU8oWXVbX7]
-
-In short: let the hooks push feedback continuously during the build, then submit the Google form as your final wrap-up near the end.
----
-
-## ✅ Features Checklist
-
-### Product & Commercial Proposition
-
-* Clear customer problem
-* Defined target user or customer
-* Clear product proposition
-* Meaningful role for the AI agent
-* Credible commercial or business model
-
-### Agent & Transaction Flow
-
-* Working AI-agent workflow
-* Agent discovery or decision-making
-* XRPL AI Starter Kit integration (recommended)
-* Agentic payment standard such as x402 or MPP (recommended)
-* At least one successful XRPL transaction
-* Product, service, or value delivered after the transaction
-
-### Submission
-
-* Public GitHub repository
-* Source code
-* Setup instructions
-* Product overview
-* Architecture diagram
-* XRPL transaction hashes or explorer references
-* Explanation of the XRPL AI Starter Kit integration if used (recommended)
-* Explanation of the agentic payment flow if a recommended agentic payment standard such as x402 or MPP is used
-* Builder feedback completed
-
----
-
-## 🎤 Submission & Demo
-
-**Format**: Working Prototype + Public GitHub Repository
-
-Your final submission should include:
-
-* Clear articulation of the customer problem
-* Clear representation of the proposed product or service
-* Explanation of how the AI agent creates value
-* Demonstration of the core customer journey
-* Demonstration of the agentic transaction flow
-* At least one successful XRPL transaction
-* Explanation of the XRPL AI Starter Kit integration if used (recommended)
-* Explanation of how any recommended agentic payment standard such as x402 or MPP is used, if applicable
-* Architecture diagram
-* Transaction hashes or explorer references
-
-The submission should be **concise, comprehensive, and easy to follow**, with enough information for reviewers to understand what you built, how it works, and how the core experience can be reproduced.
-
----
-
-## 🚀 Challenge North Star
-
-> **Don't just make an agent that can pay. Build a business because agents can pay.**
-
-Build something where removing the AI agent or removing autonomous payments would fundamentally weaken the product.
+The agentic loop, ranking, audit anchor, ODRL and dashboard are in. What is still open:
+
+- **More than one task type.** `port_congestion` is the only spec in [ledger402/tasks.py](ledger402/tasks.py). Adding private credit or supply-chain tasks is now a matter of declaring signals and providers, not changing the graph.
+- **Persistence.** Purchase idempotency is process-local and dies on orchestrator restart. A run store is needed before the loop can survive a crash mid-purchase.
+- **Reconciliation for `UNKNOWN` payments.** The agent correctly refuses to retry, but nothing later checks whether that transaction actually settled.
+- **Confidence model validation.** `FLOOR`/`SPAN` in [ledger402/confidence.py](ledger402/confidence.py) are calibrated to the demo, not fitted to data.
+- **RLUSD.** Cleaner commercial amounts than micro-XRP drops; drops stay the on-chain unit until then.
+- **Not next unless the demo needs it:** live provider APIs, Docker/cloud, x402-secure VI, accounts/auth.

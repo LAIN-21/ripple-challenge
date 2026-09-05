@@ -26,9 +26,14 @@ def main() -> None:
     except RuntimeError as exc:
         fail(str(exc))
 
-    premium = providers.get_provider("satellite-logistics-intel")
+    # Defaults to the satellite feed; pass a provider id to settle against another one,
+    # e.g. `make pay-once ARGS=terminal-ops-telemetry`.
+    provider_id = sys.argv[1] if len(sys.argv) > 1 else "satellite-logistics-intel"
+    premium = providers.get_provider(provider_id)
     if premium is None:
-        fail("satellite-logistics-intel missing from providers.json")
+        fail(f"{provider_id} missing from providers.json")
+    if not premium.get("payment_required"):
+        fail(f"{provider_id} is a free provider; there is nothing to settle.")
     url = providers.resolve_url(premium)
     price = int(premium.get("price_drops") or 0)
 
@@ -48,7 +53,7 @@ def main() -> None:
 
     result = payment.purchase_premium(
         url=url,
-        run_id="pay-once",
+        run_id=f"pay-once-{provider_id}",
         provider_id=str(premium["id"]),
         expected_drops=price,
         remaining_budget_drops=price,

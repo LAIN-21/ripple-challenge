@@ -7,4 +7,8 @@ requests>=2,<3
 httpx>=0.28.1
 pydantic>=2,<3
 streamlit
+plotly>=5.20,<7
+langgraph>=0.2,<0.7
+langchain-core>=0.3,<0.4
+langchain-groq>=0.2,<0.4
 pytest

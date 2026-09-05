@@ -10,6 +10,7 @@
     "freshness_hours": 72,
     "quality_score": 0.62,
     "expected_information_gain": 0.05,
+    "signals": ["berth_occupancy", "average_wait_hours", "vessel_queue"],
     "description": "Stale public berth and queue statistics (synthetic)."
   },
   {
@@ -23,6 +24,26 @@
     "freshness_hours": 3,
     "quality_score": 0.93,
     "expected_information_gain": 0.35,
+    "signals": [
+      "yard_utilization",
+      "anchored_vessels_delta",
+      "container_density_delta",
+      "truck_activity_delta"
+    ],
     "description": "Fresh synthetic satellite logistics intelligence."
+  },
+  {
+    "id": "terminal-ops-telemetry",
+    "name": "Terminal Operations Telemetry",
+    "category": "port_congestion",
+    "base_url_env": "TELEMETRY_PROVIDER_URL",
+    "path": "/intelligence/terminal-operations",
+    "payment_required": true,
+    "price_drops": 600,
+    "freshness_hours": 6,
+    "quality_score": 0.81,
+    "expected_information_gain": 0.12,
+    "signals": ["gate_turnaround_minutes", "rail_dwell_hours"],
+    "description": "Cheaper synthetic landside telemetry: gate turnaround and rail dwell."
   }
 ]

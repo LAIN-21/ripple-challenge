@@ -1,0 +1,10 @@
+{
+  "provider_id": "terminal-ops-telemetry",
+  "provider_name": "Terminal Operations Telemetry",
+  "port": "Port X",
+  "gate_turnaround_minutes": 84,
+  "rail_dwell_hours": 41.5,
+  "freshness_hours": 6,
+  "quality_score": 0.81,
+  "synthetic": true
+}

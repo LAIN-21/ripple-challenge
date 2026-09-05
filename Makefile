@@ -18,7 +18,7 @@ dev-start:
 	bash scripts/dev-start.sh
 
 pay-once:
-	$(PYTHON) scripts/pay_once.py
+	$(PYTHON) scripts/pay_once.py $(ARGS)
 
 test:
 	$(PYTHON) -m pytest -q
