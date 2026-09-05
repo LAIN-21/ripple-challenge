@@ -52,7 +52,9 @@ def test_stream_result_matches_the_blocking_run(paying_agent):  # noqa: F811
     assert round(streamed["final_confidence"], 4) == round(blocking["final_confidence"], 4)
 
 
-def test_snapshot_tracks_spending_as_it_happens(paying_agent):  # noqa: F811
+def test_snapshot_tracks_spending_as_it_happens(free_provider_up, settling_agent):  # noqa: F811
+    """Uses the faithful payment mock so the payment-internal events are really emitted.
+    Per-event snapshot timing is covered in detail by tests/test_stream_pacing.py."""
     chunks = list(graph.stream_agent(question=QUESTION, budget_drops=5000, target_confidence=0.92))
     spent = [c["snapshot"]["spent_drops"] for c in chunks if c["kind"] == "event"]
 

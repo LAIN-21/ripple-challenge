@@ -10,6 +10,7 @@ import requests
 from xrpl.wallet import Wallet
 
 from ledger402 import audit
+from ledger402 import network as xrpl_network
 
 try:
     from x402_xrpl.clients import decode_payment_response, x402_requests
@@ -201,6 +202,11 @@ def _buyer_session(
     rpc = os.getenv("XRPL_RPC_URL", "https://s.altnet.rippletest.net:51234/")
     network = os.getenv("XRPL_NETWORK", "xrpl:1")
     pay_to = os.environ["XRPL_PAY_TO"]
+
+    # Checked here rather than only at startup: this is the last point before a key
+    # signs anything, so a mid-run environment change cannot slip past it.
+    xrpl_network.assert_testnet(rpc, network)
+
     buyer = Wallet.from_seed(seed)
 
     def selector(
@@ -316,6 +322,9 @@ def purchase_premium(
                 events,
                 "XRPL_PAYMENT_CONFIRMED",
                 tx_hash=tx_hash,
+                # Carried on the event so a consumer reading only the log can account for
+                # the spend without correlating back to the approval.
+                price_drops=int(expected_drops),
                 network_fee_drops=fee,
                 explorer=EXPLORER_TX.format(hash=tx_hash) if tx_hash else None,
             )
@@ -328,6 +337,13 @@ def purchase_premium(
     except PaymentRequirementRejected as exc:
         record.state = REQUIREMENT_REJECTED
         record.error = str(exc)
+        return record
+    except xrpl_network.NonTestnetBlocked as exc:
+        # Refused before the wallet was constructed, so nothing was signed or submitted.
+        # Reporting this as UNKNOWN would wrongly imply a transaction might be in flight.
+        record.state = CONFIG_ERROR
+        record.error = str(exc)
+        audit.add(events, "NON_TESTNET_BLOCKED", reason=str(exc))
         return record
     except Exception as exc:  # payment may already have been submitted
         record.state = UNKNOWN

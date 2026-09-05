@@ -654,15 +654,58 @@ def stream_agent(
 
     emitted = 0
     last_state: AgentState = initial
+
+    # LangGraph yields state only after a whole node finishes, so every event a node
+    # emitted would otherwise carry the node's *final* numbers. The procure node emits
+    # four events and spends money, which would show the budget already drained at the
+    # moment the agent merely observed the 402. So the snapshot accompanying each event
+    # is rebuilt from the events themselves, in order.
+    live = {
+        "confidence": 0.0,
+        "initial_confidence": None,
+        "spent_drops": 0,
+        "settlement_count": 0,
+        "evidence_count": 0,
+        "iterations": 0,
+    }
+
+    def snapshot_after(event: dict[str, Any], state: AgentState) -> dict[str, Any]:
+        detail = event.get("detail") or {}
+        event_type = event.get("type")
+        if event_type == "CONFIDENCE_ASSESSED":
+            live["confidence"] = float(detail.get("confidence") or live["confidence"])
+            if live["initial_confidence"] is None:
+                live["initial_confidence"] = live["confidence"]
+            live["iterations"] += 1
+        elif event_type == "XRPL_PAYMENT_CONFIRMED":
+            live["settlement_count"] += 1
+            live["spent_drops"] += int(detail.get("price_drops") or 0)
+        elif event_type in {"PUBLIC_SOURCE_QUERIED", "PREMIUM_RESOURCE_UNLOCKED"}:
+            live["evidence_count"] += 1
+
+        budget = int(state.get("budget_drops") or 0)
+        return {
+            **live,
+            "target_confidence": state.get("target_confidence") or 0.0,
+            "budget_drops": budget,
+            "remaining_budget_drops": budget - live["spent_drops"],
+            "latest_ranking": (state.get("rankings") or [None])[-1],
+        }
+
     try:
         for state in get_graph().stream(
             initial, _run_config(initial), stream_mode="values"
         ):
             last_state = state
             log = state.get("event_log") or []
-            snapshot = progress_snapshot(state)
             while emitted < len(log):
-                yield {"kind": "event", "index": emitted, "event": log[emitted], "snapshot": snapshot}
+                event = log[emitted]
+                yield {
+                    "kind": "event",
+                    "index": emitted,
+                    "event": event,
+                    "snapshot": snapshot_after(event, state),
+                }
                 emitted += 1
     except Exception as exc:
         # A crashed run must still close the stream cleanly, or the view hangs forever.

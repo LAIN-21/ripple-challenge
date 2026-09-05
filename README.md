@@ -10,7 +10,13 @@ writing the report; every economic decision is deterministic and unit-tested. Wi
 `GROQ_API_KEY` set, the agent runs fully deterministically. See [AGENT_PLAN.md](AGENT_PLAN.md).
 
 **Real:** x402, XRPL Testnet settlement, the LangGraph loop, budget and policy rails, the audit
-anchor, HTTP provider architecture.
+anchor, HTTP provider architecture. Verified end to end on the XRPL Testnet — a full two-settlement
+run produced `tesSUCCESS` payments of 1200 and 600 drops, validated in ledgers 20493969 and 20493983.
+
+**Testnet XRP is not money.** It comes free from a faucet, has no value, cannot be exchanged, and
+lives on a ledger separate from Mainnet. There is nothing to buy and nothing to lose. The build
+refuses to sign against anything but a recognised test network — see
+[ledger402/network.py](ledger402/network.py); `GET /capabilities` reports the current posture.
 
 **Synthetic:** port data, satellite data, telemetry, provider identities, ODRL terms, commercial
 pricing. The confidence model is a calibrated heuristic, not a validated forecasting model.
