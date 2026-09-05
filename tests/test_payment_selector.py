@@ -152,3 +152,46 @@ def test_matching_invoice_may_sign(monkeypatch):
     result = _purchase(run_id="match-ok")
     assert sign_calls == [VALID]
     assert result.state == SUCCESS
+
+
+def test_atomic_memo_payer_copies_source_and_destination_tags(monkeypatch):
+    """Gateway require_payment stamps extra.sourceTag; facilitator verify requires it on the Payment."""
+    from xrpl.wallet import Wallet
+    from x402_xrpl.types import PaymentRequirements
+
+    from ledger402.payment import _atomic_memo_payment_header_factory
+
+    captured: dict = {}
+
+    def fake_autofill(tx, client):
+        captured["tx"] = tx
+        return tx
+
+    class _Signed:
+        def blob(self):
+            return "00"
+
+    monkeypatch.setattr("ledger402.payment.autofill", fake_autofill)
+    monkeypatch.setattr("ledger402.payment.sign", lambda tx, wallet: _Signed())
+    monkeypatch.setattr(
+        "ledger402.payment.get_latest_validated_ledger_sequence", lambda client: 1
+    )
+
+    factory = _atomic_memo_payment_header_factory(
+        wallet=Wallet.create(),
+        rpc_url="https://s.altnet.rippletest.net:51234/",
+        evidence_hash="ab" * 32,
+    )
+    factory(
+        PaymentRequirements(
+            scheme="exact",
+            network="xrpl:1",
+            amount="1200",
+            asset="XRP",
+            pay_to="rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe",
+            max_timeout_seconds=60,
+            extra={"invoiceId": "inv-1", "sourceTag": 804681468, "destinationTag": 7},
+        )
+    )
+    assert captured["tx"].source_tag == 804681468
+    assert captured["tx"].destination_tag == 7

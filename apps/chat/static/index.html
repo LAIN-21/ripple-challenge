@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assistant</title>
+  <style>
+    :root {
+      --bg: #f7f7f8;
+      --panel: #ffffff;
+      --user: #ececec;
+      --border: #e5e5e5;
+      --text: #0d0d0d;
+      --muted: #6b6b6b;
+      --accent: #10a37f;
+      --font: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 16px;
+      line-height: 1.55;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand { font-weight: 600; }
+    .invoice-nav {
+      color: #0b6e4f;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      font-family: var(--mono);
+    }
+    .invoice-nav:hover { text-decoration: underline; }
+    #thread {
+      flex: 1;
+      overflow-y: auto;
+      padding: 28px 16px 12px;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; }
+    .row { display: flex; margin-bottom: 22px; }
+    .row.user { justify-content: flex-end; }
+    .bubble {
+      max-width: 85%;
+      padding: 12px 16px;
+      border-radius: 18px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .row.user .bubble { background: var(--user); border-bottom-right-radius: 6px; }
+    .row.assistant .bubble {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 6px;
+    }
+    .bubble h3 { margin: 18px 0 8px; font-size: 15px; }
+    .bubble h3:first-child { margin-top: 0; }
+    .bubble p { margin: 0 0 10px; }
+    .bubble ul { margin: 0 0 10px; padding-left: 18px; }
+    .bubble a { color: #0b6e4f; }
+    .bubble a.invoice-dl { font-weight: 650; text-decoration: none; }
+    .bubble a.invoice-dl:hover { text-decoration: underline; }
+    .hash { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+    .muted { color: var(--muted); font-size: 14px; }
+    form {
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+      padding: 12px 16px 18px;
+    }
+    .composer {
+      max-width: 760px;
+      margin: 0 auto;
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+    textarea {
+      flex: 1;
+      resize: none;
+      min-height: 52px;
+      max-height: 160px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font: inherit;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 18px;
+      font-weight: 650;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <header>
+    <nav>
+      <span class="brand">Assistant</span>
+      <a id="invoice-nav" class="invoice-nav" hidden href="#">Invoice</a>
+    </nav>
+  </header>
+  <div id="thread"><div class="wrap" id="messages"></div></div>
+  <form id="form">
+    <div class="composer">
+      <textarea id="input" rows="2">Assess whether Port of Singapore (PSA) is facing critical yard and terminal congestion</textarea>
+      <button id="send" type="submit">Send</button>
+    </div>
+  </form>
+  <script>
+    const ORCH = "http://127.0.0.1:8000";
+    const EXPLORER = "https://testnet.xrpl.org/transactions/";
+    const messages = document.getElementById("messages");
+    const form = document.getElementById("form");
+    const input = document.getElementById("input");
+    const send = document.getElementById("send");
+    const invoiceNav = document.getElementById("invoice-nav");
+    let source = null;
+    let blobUrls = [];
+
+    function invoiceFilename(invoice, ext) {
+      return String(invoice.invoice_id || invoice.run_id || "Invoice_ledger402") + "." + ext;
+    }
+
+    function revokeBlobs() {
+      blobUrls.forEach((url) => URL.revokeObjectURL(url));
+      blobUrls = [];
+    }
+
+    function blobHref(text, mime) {
+      const url = URL.createObjectURL(new Blob([text], { type: mime }));
+      blobUrls.push(url);
+      return url;
+    }
+
+    function bindInvoiceDownloads(invoice, root) {
+      revokeBlobs();
+      if (!(invoice && invoice.invoice_id)) {
+        invoiceNav.hidden = true;
+        invoiceNav.textContent = "Invoice";
+        invoiceNav.removeAttribute("download");
+        invoiceNav.removeAttribute("href");
+        invoiceNav.removeAttribute("title");
+        return;
+      }
+      const json = invoice.json || JSON.stringify(invoice, null, 2);
+      invoiceNav.hidden = false;
+      invoiceNav.textContent = invoice.invoice_id;
+      invoiceNav.title = "Download invoice JSON";
+      invoiceNav.download = invoiceFilename(invoice, "json");
+      invoiceNav.href = blobHref(json, "application/json");
+      if (!root) return;
+      root.querySelectorAll("a.invoice-dl").forEach((link) => {
+        const kind = link.getAttribute("data-kind") || "json";
+        if (kind === "md") {
+          link.download = invoiceFilename(invoice, "md");
+          link.href = blobHref(invoice.markdown || "", "text/markdown");
+          return;
+        }
+        link.download = invoiceFilename(invoice, "json");
+        link.href = blobHref(json, "application/json");
+      });
+    }
+
+    function addRow(role, htmlOrText, asHtml) {
+      const row = document.createElement("div");
+      row.className = "row " + role;
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      if (asHtml) bubble.innerHTML = htmlOrText;
+      else bubble.textContent = htmlOrText;
+      row.appendChild(bubble);
+      messages.appendChild(row);
+      row.scrollIntoView({ block: "end" });
+      return bubble;
+    }
+
+    function esc(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function pct(value) {
+      const n = Number(value || 0);
+      return (n * 100).toFixed(1) + "%";
+    }
+
+    function renderResult(result) {
+      if (result.error) {
+        return "<p>" + esc(result.reason || result.error) + "</p>";
+      }
+      const report = result.report || {};
+      const evidence = report.evidence || [];
+      const invoice = result.invoice || {};
+      const items = invoice.line_items || [];
+      const summary = invoice.financial_summary || {};
+      let html = "";
+      html += "<h3>Answer</h3>";
+      html += "<p><strong>Verdict:</strong> " + esc(report.congestion_risk || "—") + "</p>";
+      html += "<p><strong>Confidence:</strong> " + esc(pct(result.final_confidence)) + "</p>";
+      if (report.summary) html += "<p>" + esc(report.summary) + "</p>";
+      if (evidence.length) {
+        html += "<p><strong>Evidence</strong></p><ul>";
+        evidence.forEach((line) => { html += "<li>" + esc(line) + "</li>"; });
+        html += "</ul>";
+      }
+
+      html += "<h3>Invoice</h3>";
+      if (invoice.invoice_id) {
+        html += "<p><a class='invoice-dl' href='#' data-kind='json' title='Download invoice JSON'>" +
+          esc(invoice.invoice_id) + "</a>";
+        html += " · <a class='invoice-dl' href='#' data-kind='md' title='Download invoice Markdown'>Markdown</a></p>";
+      }
+      if (!items.length) {
+        html += "<p class='muted'>No on-ledger settlement this run (public-only).</p>";
+      } else {
+        html += "<ul>";
+        items.forEach((item) => {
+          const drops = (item.amount_paid && item.amount_paid.drops) || 0;
+          html += "<li>" + esc(item.vendor_name || item.provider_id) + " — " +
+            esc(drops) + " drops · seller <code>" + esc(item.seller_address || "n/a") +
+            "</code></li>";
+        });
+        html += "</ul>";
+        html += "<p>Data cost (settled): " + esc(summary.total_drops_spent || 0) + " drops<br>";
+        html += "Network fee (settled): " + esc(summary.total_network_fee_drops || 0) + " drops<br>";
+        html += "Protocol take 2.5% (not collected on-ledger): " +
+          esc(summary.protocol_fee_drops || 0) + " drops<br>";
+        html += "Net settlement: " + esc(summary.net_settlement_drops || 0) + " drops</p>";
+      }
+
+      html += "<h3>Payment</h3>";
+      const paid = items.filter((item) => item.tx_hash);
+      if (!paid.length) {
+        html += "<p class='muted'>No Testnet payment to verify.</p>";
+      } else {
+        html += "<p>Open a hash on the XRPL Testnet explorer to confirm the settlement exists.</p><ul>";
+        paid.forEach((item) => {
+          const hash = item.tx_hash;
+          const href = item.tx_explorer_url || (EXPLORER + hash);
+          html += "<li>" + esc(item.vendor_name || "") + "<br><a class='hash' href='" +
+            esc(href) + "' target='_blank' rel='noopener'>" + esc(hash) + "</a></li>";
+        });
+        html += "</ul>";
+      }
+      return html;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const question = input.value.trim();
+      if (!question || send.disabled) return;
+      send.disabled = true;
+      addRow("user", question, false);
+      const placeholder = addRow("assistant", "Working…", false);
+      if (source) { source.close(); source = null; }
+
+      try {
+        const response = await fetch(ORCH + "/research/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question,
+            budget_drops: 5000,
+            target_confidence: 0.85,
+            delivery_tier: "tier_1",
+          }),
+        });
+        if (response.status === 409) {
+          placeholder.textContent = "A research run is already in progress. Wait for it to finish, then send again.";
+          send.disabled = false;
+          return;
+        }
+        if (!response.ok) {
+          placeholder.textContent = "Could not start research: " + (await response.text());
+          send.disabled = false;
+          return;
+        }
+        const { run_id } = await response.json();
+        source = new EventSource(ORCH + "/research/watch?run_id=" + encodeURIComponent(run_id));
+        source.onmessage = (msg) => {
+          const chunk = JSON.parse(msg.data);
+          if (chunk.kind === "result") {
+            const result = chunk.result || {};
+            placeholder.innerHTML = renderResult(result);
+            bindInvoiceDownloads(result.invoice || {}, placeholder);
+            source.close();
+            source = null;
+            send.disabled = false;
+          } else if (chunk.kind === "error") {
+            placeholder.textContent = chunk.reason || "The run failed.";
+            source.close();
+            source = null;
+            send.disabled = false;
+          }
+        };
+        source.onerror = () => {
+          if (send.disabled) {
+            placeholder.textContent = "Lost the research stream. Check that the orchestrator is running on port 8000.";
+            send.disabled = false;
+          }
+          if (source) source.close();
+          source = null;
+        };
+      } catch (err) {
+        placeholder.textContent = String(err);
+        send.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

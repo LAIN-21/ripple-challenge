@@ -6,17 +6,29 @@ from typing import Iterator
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ledger402 import REPO_ROOT, llm, tasks
 from ledger402 import network as xrpl_network
+from ledger402 import run_bus
 from ledger402.graph import DEFAULT_BUDGET_DROPS, run_agent, stream_agent
 from ledger402.models import ResearchRequest
 
 load_dotenv(REPO_ROOT / ".env")
 
 app = FastAPI(title="Ledger402 orchestrator")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:8600",
+        "http://localhost:8600",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 LIVE_PAGE = Path(__file__).resolve().parents[1] / "ui" / "live.html"
 
@@ -95,6 +107,53 @@ def research_stream(
         headers={
             "Cache-Control": "no-cache",
             # Keep proxies from buffering the stream into one delivery at the end.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/research/start")
+def research_start(body: ResearchRequest) -> dict[str, str]:
+    """Start one shared run for the chat frontend and the Streamlit observer."""
+    try:
+        run_id = run_bus.start(
+            question=body.question,
+            budget_drops=body.budget_drops,
+            task_type=body.task_type,
+            run_id=body.run_id,
+            target_confidence=body.target_confidence,
+            max_purchases=body.max_purchases,
+            delivery_tier=body.delivery_tier,
+            replay=body.replay,
+        )
+    except run_bus.RunInProgress as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"run_id": run_id}
+
+
+@app.get("/research/active")
+def research_active() -> dict:
+    """Latest shared run snapshot. Streamlit polls this instead of starting a run."""
+    return run_bus.snapshot()
+
+
+@app.get("/research/watch")
+def research_watch(run_id: str | None = Query(default=None)) -> StreamingResponse:
+    """Subscribe to an already-started run. Does not invoke the agent again."""
+    try:
+        iterator = run_bus.follow(run_id)
+    except run_bus.UnknownRun as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    def events() -> Iterator[str]:
+        for chunk in iterator:
+            yield f"data: {json.dumps(chunk, default=str)}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
     )

@@ -379,6 +379,16 @@ def _atomic_memo_payment_header_factory(
                 value=f"{ceiling:.6f}",
             )
 
+        extra = reqs.extra if isinstance(reqs.extra, Mapping) else {}
+        source_tag: int | None = None
+        destination_tag: int | None = None
+        raw_source = extra.get("sourceTag")
+        if raw_source is not None:
+            source_tag = int(raw_source)
+        raw_dest = extra.get("destinationTag")
+        if raw_dest is not None:
+            destination_tag = int(raw_dest)
+
         current_validated_ledger = get_latest_validated_ledger_sequence(client)
         max_ledger_delta = int(math.ceil(int(reqs.max_timeout_seconds) / 5.0) + 2)
         last_ledger_sequence = int(current_validated_ledger) + max_ledger_delta
@@ -390,6 +400,8 @@ def _atomic_memo_payment_header_factory(
             send_max=send_max,
             memos=memos,
             invoice_id=invoice_id_field,
+            source_tag=source_tag,
+            destination_tag=destination_tag,
             last_ledger_sequence=last_ledger_sequence,
         )
         filled = autofill(payment_tx, client)
