@@ -48,6 +48,10 @@ def _facilitator() -> str:
     return os.getenv("XRPL_FACILITATOR_URL", DEFAULT_FACILITATOR)
 
 
+def _funding_asset() -> str:
+    return (os.getenv("LEDGER402_FUNDING_ASSET") or "XRP").strip().upper() or "XRP"
+
+
 def _network() -> str:
     return os.getenv("XRPL_NETWORK", DEFAULT_NETWORK)
 
@@ -130,6 +134,11 @@ def _gate_for(path: str, spec: dict[str, Any]):
                 "Run `make wallet-setup`, copy the merchant address into `.env`,\n"
                 "then run `make dev-start` again."
             )
+        # Opt-in cross-currency settlement (RLUSD -> XRP native DEX autobridge): the
+        # facilitator's verifier only accepts a non-matching SendMax asset when the
+        # merchant's own requirement advertises this flag (see x402_xrpl README,
+        # "Cross-currency payments (opt-in)").
+        extra = {"crossCurrency": True} if _funding_asset() == "RLUSD" else None
         _gates[key] = require_payment(
             path=path,
             price=price,
@@ -139,6 +148,7 @@ def _gate_for(path: str, spec: dict[str, Any]):
             asset="XRP",
             description=str(spec.get("description") or path),
             source_tag=SOURCE_TAG,
+            extra=extra,
         )
     return _gates[key]
 

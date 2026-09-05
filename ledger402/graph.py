@@ -31,6 +31,7 @@ from langgraph.graph import END, StateGraph
 
 from ledger402 import audit, classify, confidence as conf, payment, providers, ranking, synthesis, tasks
 from ledger402 import bundle as bundle_mod
+from ledger402 import invoice as invoice_mod
 from ledger402 import replay as replay_mod
 from ledger402.confidence import EvidenceItem
 from ledger402.tasks import TaskSpec
@@ -74,6 +75,7 @@ class AgentState(TypedDict, total=False):
     report: dict[str, Any]
     data_bundle: dict[str, Any]
     audit_anchor: dict[str, Any]
+    invoice: dict[str, Any]
     event_log: list[dict[str, Any]]
 
     error: str | None
@@ -325,6 +327,11 @@ def procure(state: AgentState) -> dict[str, Any]:
 
     price = int(provider.get("price_drops") or 0)
     pay_to = str(provider.get("pay_to") or os.getenv("XRPL_PAY_TO") or "")
+    # Atomic Memo proof: the SHA-256 hash of the requested payload spec, embedded
+    # on-ledger alongside the settling Payment (see payment.AUDIT_MEMO_TYPE_HEX) so
+    # the purchase and the proof of what was requested are one signed transaction.
+    evidence_hash = payment.compute_evidence_hash(provider)
+    funding_asset = (os.getenv("LEDGER402_FUNDING_ASSET") or "XRP").strip().upper() or "XRP"
     purchases = list(state.get("purchases") or [])
     purchased_ids = list(state.get("purchased_ids") or [])
     evidence = list(state.get("evidence") or [])
@@ -374,6 +381,7 @@ def procure(state: AgentState) -> dict[str, Any]:
             transaction_hash=tx,
             explorer_url=replayed.get("explorer_url"),
             odrl=replayed["body"].get("odrl"),
+            memo_proof=replayed.get("memo_proof") or evidence_hash,
             replay=True,
         )
         audit.add(
@@ -426,6 +434,8 @@ def procure(state: AgentState) -> dict[str, Any]:
             remaining_budget_drops=state["remaining_budget_drops"],
             expected_pay_to=pay_to or None,
             log=log,
+            evidence_hash=evidence_hash,
+            funding_asset=funding_asset,
         )
     except Exception as exc:
         # The transaction may already have been submitted; never retry blindly.
@@ -469,6 +479,8 @@ def procure(state: AgentState) -> dict[str, Any]:
         ),
         network_fee_drops=result.network_fee_drops,
         odrl=result.body.get("odrl"),
+        memo_proof=result.memo_proof,
+        funding_asset=funding_asset,
     )
     evidence.append(
         EvidenceItem(
@@ -555,7 +567,15 @@ def anchor(state: AgentState) -> dict[str, Any]:
         audit_hash=result["audit_hash"],
         settlement_count=result["settlement_count"],
     )
-    return {"audit_anchor": result}
+    invoice = invoice_mod.generate_procurement_invoice({**state, "audit_anchor": result})
+    audit.add(
+        state["event_log"],
+        "PROCUREMENT_INVOICE_GENERATED",
+        invoice_id=invoice["invoice_id"],
+        line_items=len(invoice["line_items"]),
+        total_drops_spent=invoice["financial_summary"]["total_drops_spent"],
+    )
+    return {"audit_anchor": result, "invoice": invoice}
 
 
 # ---------------------------------------------------------------------- routing
@@ -919,6 +939,8 @@ def _serialize(state: AgentState) -> dict[str, Any]:
         "delivery_tier": state.get("delivery_tier") or "tier_1",
         "replay": bool(state.get("replay")),
         "audit_anchor": state.get("audit_anchor"),
+        "invoice": state.get("invoice"),
+        "funding_asset": (os.getenv("LEDGER402_FUNDING_ASSET") or "XRP").strip().upper() or "XRP",
         "event_log": state.get("event_log", []),
         "synthetic": True,
     }

@@ -7,7 +7,7 @@ from typing import Any
 from providers_data import OFFLINE_REPLAY_SETTLEMENTS, PROVIDERS_REGISTRY
 
 from ledger402 import odrl
-from ledger402.payment import EXPLORER_TX, SUCCESS
+from ledger402.payment import EXPLORER_TX, SUCCESS, compute_evidence_hash
 from ledger402.providers import flatten_payload
 
 
@@ -60,4 +60,8 @@ def replay_purchase(provider: dict[str, Any], *, index: int, target_confidence: 
         "explorer_url": EXPLORER_TX.format(hash=tx) if tx else None,
         "ledger_index": settled.get("ledger_index"),
         "price_drops": price,
+        # A live run embeds this hash as the Memo bound to the settling Payment
+        # (payment.compute_evidence_hash); replay recomputes it from the same
+        # provider spec so a recorded receipt carries a realistic audit proof.
+        "memo_proof": compute_evidence_hash(provider),
     }

@@ -37,7 +37,10 @@ EVENT_LABELS = {
     "BUDGET_EXHAUSTED": "Procurement budget exhausted",
     "REPORT_SYNTHESIZED": "Report synthesized",
     "AUDIT_ANCHOR_COMPUTED": "Audit anchor committed",
+    "PROCUREMENT_INVOICE_GENERATED": "Institutional invoice generated",
 }
+
+AUDIT_MEMO_TYPE_HEX = "6C65646765723430323A6175646974"
 
 st.set_page_config(page_title="Ledger402", layout="wide")
 
@@ -314,8 +317,71 @@ with center:
             mime="text/markdown",
         )
 
+    invoice = (result or {}).get("invoice") if result and not result.get("error") else None
+    if invoice:
+        with st.expander("🧾 Institutional Procurement Invoice & Audit Breakdown", expanded=True):
+            st.caption(f"{invoice.get('invoice_id')} · generated {invoice.get('generated_at')}")
+            line_items = invoice.get("line_items") or []
+            if line_items:
+                st.dataframe(
+                    [
+                        {
+                            "Dataset Source": item.get("vendor_name"),
+                            "Vendor Address": item.get("seller_address") or "n/a",
+                            "Price (Drops / RLUSD)": (
+                                f"{item['amount_paid']['drops']} / "
+                                f"${item['amount_paid']['rlusd_equivalent']:.4f}"
+                            ),
+                            "Signal Impact": ", ".join(item.get("signals_acquired") or []) or "—",
+                            "On-Chain Proof": (item.get("tx_hash") or "—")[:16],
+                        }
+                        for item in line_items
+                    ],
+                    width="stretch",
+                    hide_index=True,
+                )
+                for item in line_items:
+                    if item.get("tx_explorer_url"):
+                        st.caption(
+                            f"{item['vendor_name']} → "
+                            f"[view on XRPL Testnet Explorer]({item['tx_explorer_url']})"
+                        )
+            else:
+                st.caption("No settled purchases this run — invoice covers public evidence only.")
+
+            summary = invoice.get("financial_summary") or {}
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Data cost", f"{summary.get('total_drops_spent', 0)} drops")
+            c2.metric("XRPL network fee", f"{summary.get('total_network_fee_drops', 0)} drops")
+            c3.metric(
+                "Protocol fee (2.5%)", f"{summary.get('protocol_fee_drops', 0):.0f} drops"
+            )
+            st.write(
+                f"**Net settlement:** {summary.get('net_settlement_drops', 0):.0f} drops · "
+                f"**RLUSD volume:** ${summary.get('total_rlusd_volume', 0):.4f} · "
+                f"**Final confidence:** {(summary.get('final_confidence') or 0):.1%}"
+            )
+            st.code(summary.get("composite_ledger_anchor_hash") or "", language=None)
+
+            invoice_json = invoice.get("json") or json.dumps(invoice, indent=2, default=str)
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                st.download_button(
+                    "📥 Download Institutional Invoice (.json)",
+                    data=invoice_json,
+                    file_name=f"Invoice_{result.get('run_id')}.json",
+                    mime="application/json",
+                )
+            with dc2:
+                st.download_button(
+                    "📥 Download Institutional Invoice (.md)",
+                    data=invoice.get("markdown") or "",
+                    file_name=f"Invoice_{result.get('run_id')}.md",
+                    mime="text/markdown",
+                )
+
 with right:
-    tab_live, tab_b2c = st.tabs(["Live execution", "B2C marketplace"])
+    tab_live, tab_xrpl, tab_b2c = st.tabs(["Live execution", "XRPL Engine", "B2C marketplace"])
     with tab_live:
         if not result:
             st.caption("Execution trace appears here after a run.")
@@ -325,6 +391,33 @@ with right:
             for event in result.get("event_log") or []:
                 label = EVENT_LABELS.get(event.get("type"), event.get("type"))
                 st.write(f"`{event.get('at', '')}` {label}")
+    with tab_xrpl:
+        st.caption("Native XRPL primitives backing this settlement layer.")
+        st.success("🟢 Primitive: Payment with Atomic Memo")
+        funding_asset = (result or {}).get("funding_asset", "XRP") if result else "XRP"
+        if funding_asset == "RLUSD":
+            st.info("🔵 DEX Auto-Bridge: RLUSD → XRP Pathfinding — ACTIVE this run")
+        else:
+            st.info("🔵 DEX Auto-Bridge: RLUSD → XRP Pathfinding — available (funded in XRP this run)")
+        st.caption("⚡ Consensus speed: ~3.4s (XRPL Testnet close time)")
+
+        line_items = ((result or {}).get("invoice") or {}).get("line_items") or [] if result else []
+        proven = [item for item in line_items if item.get("memo_proof")]
+        if proven:
+            st.markdown("**On-ledger audit memo, decoded**")
+            for item in proven:
+                with st.container(border=True):
+                    st.write(f"`{item.get('vendor_name')}`")
+                    st.code(
+                        "MemoType (hex):  " + AUDIT_MEMO_TYPE_HEX + "\n"
+                        "Decoded:         ledger402:audit\n"
+                        f"MemoData (hex):  {item['memo_proof']}\n"
+                        "Decoded:         SHA-256(requested payload spec) — atomic "
+                        "proof of what this settlement paid for",
+                        language=None,
+                    )
+        else:
+            st.caption("The decoded audit memo appears here once a purchase settles.")
     with tab_b2c:
         uploaded = st.file_uploader("Curator CSV / JSON", type=["csv", "json"])
         curator_label = st.text_input("Curator label", value="Independent SGSIN curator")
