@@ -72,7 +72,7 @@ def _install_paid_session(monkeypatch, *, status, headers=None, body=None, error
                 raise error
             return FakeResponse()
 
-    def fake_buyer_session(*, expected_drops, remaining_budget_drops, selector_state):
+    def fake_buyer_session(*, expected_drops, remaining_budget_drops, selector_state, **kwargs):
         del expected_drops, remaining_budget_drops, selector_state
         return FakeSession()
 

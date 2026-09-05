@@ -13,10 +13,10 @@ Every economic decision — which providers exist, what a purchase is worth, whe
 it, and whether to settle on-ledger — stays **deterministic, unit-tested, and inspectable**. The LLM
 is confined to two bounded jobs:
 
-| Job | Node | Fallback when no `GROQ_API_KEY` |
+| Job | Node | Fallback when no `GEMINI_API_KEY` |
 | --- | --- | --- |
 | Understand the business question | `understand` | Deterministic keyword classifier |
-| Write the final analyst report from purchased evidence | `synthesize` | Deterministic template |
+| Write the final analyst report from purchased evidence | `synthesize` (Tier 1) | Deterministic template |
 
 This is the direct answer to the challenge's *Trust, Governance & Agent Controls* section, and it is
 what makes a live demo safe: an LLM outage or a hallucination can degrade the prose, never the
@@ -51,7 +51,7 @@ data does not get credit for what it promised.
 
 ### `understand`
 Classifies the question into a `task_type` and extracts the subject entity (the port). Fails closed
-on unsupported tasks — an unrelated question must never be answered with Port X evidence.
+on unsupported tasks — an unrelated question must never be answered with SGSIN evidence.
 
 ### `discover`
 Filters the provider registry by task category. Deterministic, no LLM. This is where a real
@@ -114,8 +114,8 @@ confidence          = FLOOR + SPAN × coverage
 ```
 
 `FLOOR` represents the value of having any evidence at all; `SPAN` scales the rest. `FLOOR = 0.56`
-and `SPAN = 0.511` are **calibrated** so the canonical Port X scenario reproduces the documented
-demo figures — public-only lands on 58%, public + satellite on 87%. This is an explainable
+and `SPAN = 0.511` are **calibrated** so the canonical Port of Singapore scenario reproduces the
+documented demo figures — public-only lands on 58%, public + satellite on 87%. This is an explainable
 heuristic, not a statistical claim, and it is stated as such in the UI.
 
 ## Why a second premium provider changes the demo
@@ -137,12 +137,11 @@ That contrast is the demo: **the spend is a consequence of the objective, not a 
 ## Configuration
 
 ```dotenv
-GROQ_API_KEY=                       # optional; absent = deterministic fallbacks
-GROQ_MODEL=llama-3.3-70b-versatile
-GROQ_BASE_URL=https://api.groq.com/openai/v1
+GEMINI_API_KEY=                     # optional; absent = deterministic fallbacks
+GEMINI_MODEL=                       # optional cascade override, comma-separated
 LEDGER402_TARGET_CONFIDENCE=0.85
 LEDGER402_MAX_PURCHASES=3           # hard ceiling on settlements per run
-TELEMETRY_PROVIDER_URL=http://localhost:8003
+PROVIDER_URL=http://localhost:8001
 ```
 
 `LEDGER402_MAX_PURCHASES` is a safety rail, not a tuning knob: it bounds worst-case spend per run

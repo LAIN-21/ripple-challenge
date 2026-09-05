@@ -197,11 +197,14 @@ def _buyer_session(
     expected_drops: int,
     remaining_budget_drops: int,
     selector_state: dict[str, Any],
+    expected_pay_to: str | None = None,
 ) -> requests.Session:
     seed = os.environ["XRPL_WALLET_SEED"]
     rpc = os.getenv("XRPL_RPC_URL", "https://s.altnet.rippletest.net:51234/")
     network = os.getenv("XRPL_NETWORK", "xrpl:1")
-    pay_to = os.environ["XRPL_PAY_TO"]
+    pay_to = (expected_pay_to or os.environ.get("XRPL_PAY_TO") or "").strip()
+    if not pay_to:
+        raise RuntimeError(_missing_wallet_message())
 
     # Checked here rather than only at startup: this is the last point before a key
     # signs anything, so a mid-run environment change cannot slip past it.
@@ -262,6 +265,7 @@ def purchase_premium(
     remaining_budget_drops: int,
     log: list[dict[str, Any]] | None = None,
     timeout: float = 180.0,
+    expected_pay_to: str | None = None,
 ) -> PurchaseRecord:
     """Pay for a premium URL after observing a real 402. Process-local idempotency."""
     cache_key = _key(run_id, provider_id)
@@ -300,6 +304,7 @@ def purchase_premium(
             expected_drops=expected_drops,
             remaining_budget_drops=remaining_budget_drops,
             selector_state=selector_state,
+            expected_pay_to=expected_pay_to,
         )
         paid = session.get(url, timeout=timeout)
         if selector_state["rejected"] is not None:

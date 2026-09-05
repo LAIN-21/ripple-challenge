@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .streamlit/
+data/b2c/
+data/consumed_tx_hashes.json

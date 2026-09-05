@@ -27,11 +27,11 @@ def main() -> None:
         fail(str(exc))
 
     # Defaults to the satellite feed; pass a provider id to settle against another one,
-    # e.g. `make pay-once ARGS=terminal-ops-telemetry`.
-    provider_id = sys.argv[1] if len(sys.argv) > 1 else "satellite-logistics-intel"
+    # e.g. `make pay-once ARGS=terminal_telemetry_paid`.
+    provider_id = sys.argv[1] if len(sys.argv) > 1 else "satellite_logistics_paid"
     premium = providers.get_provider(provider_id)
     if premium is None:
-        fail(f"{provider_id} missing from providers.json")
+        fail(f"{provider_id} missing from the provider registry")
     if not premium.get("payment_required"):
         fail(f"{provider_id} is a free provider; there is nothing to settle.")
     url = providers.resolve_url(premium)
@@ -57,6 +57,7 @@ def main() -> None:
         provider_id=str(premium["id"]),
         expected_drops=price,
         remaining_budget_drops=price,
+        expected_pay_to=str(premium.get("pay_to") or "") or None,
     )
     print("Payment:")
     print(result.state)

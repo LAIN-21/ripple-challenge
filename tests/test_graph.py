@@ -11,7 +11,7 @@ import pytest
 from ledger402 import audit, graph, payment
 
 FREE_PAYLOAD = {
-    "provider_id": "public-port-stats",
+    "provider_id": "public_port_stats",
     "provider_name": "Public Port Statistics",
     "port": "Port X",
     "berth_occupancy": 0.71,
@@ -23,7 +23,7 @@ FREE_PAYLOAD = {
 }
 
 SATELLITE_PAYLOAD = {
-    "provider_id": "satellite-logistics-intel",
+    "provider_id": "satellite_logistics_paid",
     "provider_name": "Satellite Logistics Intelligence",
     "port": "Port X",
     "container_density_delta": 0.24,
@@ -36,7 +36,7 @@ SATELLITE_PAYLOAD = {
 }
 
 TELEMETRY_PAYLOAD = {
-    "provider_id": "terminal-ops-telemetry",
+    "provider_id": "terminal_telemetry_paid",
     "provider_name": "Terminal Operations Telemetry",
     "port": "Port X",
     "gate_turnaround_minutes": 84,
@@ -72,12 +72,12 @@ def paying_agent(monkeypatch, free_provider_up):
     """Mock settlement: each provider returns its payload and a distinct tx hash."""
     calls: list[str] = []
     bodies = {
-        "satellite-logistics-intel": SATELLITE_PAYLOAD,
-        "terminal-ops-telemetry": TELEMETRY_PAYLOAD,
+        "satellite_logistics_paid": SATELLITE_PAYLOAD,
+        "terminal_telemetry_paid": TELEMETRY_PAYLOAD,
     }
     hashes = {
-        "satellite-logistics-intel": "A" * 64,
-        "terminal-ops-telemetry": "B" * 64,
+        "satellite_logistics_paid": "A" * 64,
+        "terminal_telemetry_paid": "B" * 64,
     }
 
     def fake_purchase(*, provider_id, **kwargs):
@@ -137,7 +137,7 @@ def test_default_target_buys_satellite_only(paying_agent):
     assert result["settlement_count"] == 1
     assert result["spent_drops"] == 1200
     assert result["remaining_budget_drops"] == 3800
-    assert paying_agent == ["satellite-logistics-intel"]
+    assert paying_agent == ["satellite_logistics_paid"]
 
 
 def test_higher_target_buys_a_second_provider(paying_agent):
@@ -149,7 +149,7 @@ def test_higher_target_buys_a_second_provider(paying_agent):
     assert result["remaining_budget_drops"] == 3200
     assert round(result["final_confidence"], 2) == 0.92
     # Highest confidence-per-drop first, not cheapest first.
-    assert paying_agent == ["satellite-logistics-intel", "terminal-ops-telemetry"]
+    assert paying_agent == ["satellite_logistics_paid", "terminal_telemetry_paid"]
 
 
 def test_agent_stops_when_no_provider_is_worth_buying(paying_agent):
@@ -185,7 +185,7 @@ def test_budget_too_small_prevents_any_purchase(paying_agent):
 def test_budget_allows_only_the_cheaper_provider(paying_agent):
     """With 800 drops the satellite feed is unaffordable, so telemetry is bought."""
     result = graph.run_agent(question=QUESTION, budget_drops=800, target_confidence=0.92)
-    assert paying_agent == ["terminal-ops-telemetry"]
+    assert paying_agent == ["terminal_telemetry_paid"]
     assert result["spent_drops"] == 600
     assert result["remaining_budget_drops"] == 200
 
@@ -220,7 +220,7 @@ def test_failed_provider_is_not_retried_in_the_same_run(monkeypatch, free_provid
     monkeypatch.setattr(payment, "purchase_premium", always_fails)
     graph.run_agent(question=QUESTION, budget_drops=5000, target_confidence=0.95)
 
-    assert sorted(attempts) == ["satellite-logistics-intel", "terminal-ops-telemetry"]
+    assert sorted(attempts) == ["satellite_logistics_paid", "terminal_telemetry_paid"]
 
 
 def test_missing_wallet_is_a_config_error_not_a_crash(monkeypatch, free_provider_up):
@@ -250,7 +250,7 @@ def test_blocked_network_is_fatal_and_does_not_try_remaining_providers(
     monkeypatch.setattr(payment, "purchase_premium", blocked)
     result = graph.run_agent(question=QUESTION, budget_drops=5000, target_confidence=0.95)
 
-    assert attempts == ["satellite-logistics-intel"]
+    assert attempts == ["satellite_logistics_paid"]
     assert "test networks only" in (result["stop_reason"] or "")
     assert "test networks only" in (result["configuration_error"] or "")
     assert "No remaining provider" not in (result["stop_reason"] or "")

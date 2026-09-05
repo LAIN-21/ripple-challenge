@@ -33,24 +33,32 @@ class TaskSpec:
         return self.signal_weights.get(signal, 0.0)
 
 
+# Core B2B partition. Sums to 1.0 so the 58/87/91.6 calibration is unchanged
+# when no curator dataset is registered.
+CORE_SIGNAL_WEIGHTS = {
+    "berth_occupancy": 0.10,
+    "average_wait_hours": 0.06,
+    "vessel_queue": 0.09,
+    "yard_utilization": 0.25,
+    "anchored_vessels_delta": 0.20,
+    "container_density_delta": 0.12,
+    "truck_activity_delta": 0.06,
+    "gate_turnaround_minutes": 0.07,
+    "rail_dwell_hours": 0.05,
+}
+
+# Additive B2C optionals. Not renormalized; unused unless a curator upload is held.
+B2C_OPTIONAL_SIGNAL_WEIGHTS = {
+    "customs_dwell": 0.04,
+    "chassis_availability": 0.03,
+    "inspection_backlog": 0.03,
+}
+
 PORT_CONGESTION_SPEC = TaskSpec(
     task_type=PORT_CONGESTION,
     label="Port congestion assessment",
-    signal_weights={
-        # Public statistics: broad but shallow.
-        "berth_occupancy": 0.10,
-        "average_wait_hours": 0.06,
-        "vessel_queue": 0.09,
-        # Satellite observation: the signals that actually resolve congestion.
-        "yard_utilization": 0.25,
-        "anchored_vessels_delta": 0.20,
-        "container_density_delta": 0.12,
-        "truck_activity_delta": 0.06,
-        # Landside telemetry: the last mile of certainty.
-        "gate_turnaround_minutes": 0.07,
-        "rail_dwell_hours": 0.05,
-    },
-    default_question="Assess whether Port X is becoming congested.",
+    signal_weights={**CORE_SIGNAL_WEIGHTS, **B2C_OPTIONAL_SIGNAL_WEIGHTS},
+    default_question="Assess whether Port of Singapore (PSA) is facing critical yard and terminal congestion.",
     required_terms=("port",),
     supporting_terms=("congest", "berth", "vessel", "queue", "yard", "terminal", "dwell"),
 )

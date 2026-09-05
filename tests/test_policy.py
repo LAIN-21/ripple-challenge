@@ -1,7 +1,7 @@
 from ledger402.policy import MAX_SINGLE_PURCHASE_DROPS, check
 
 PREMIUM = {
-    "id": "satellite-logistics-intel",
+    "id": "satellite_logistics_paid",
     "category": "port_congestion",
     "price_drops": 1200,
 }

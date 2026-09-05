@@ -126,6 +126,38 @@ def test_capabilities_endpoint(client):
     assert body["llm_enabled"] is False
 
 
+def test_sse_replay_and_tier_query_params(monkeypatch):
+    from apps.orchestrator.main import app
+
+    monkeypatch.setattr(
+        payment,
+        "purchase_premium",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("replay must not settle")),
+    )
+    client = TestClient(app)
+    with client.stream(
+        "GET",
+        "/research/stream",
+        params={
+            "question": "Assess whether Port of Singapore (PSA) is facing critical yard and terminal congestion",
+            "target_confidence": 0.85,
+            "delivery_tier": "tier_2",
+            "replay": True,
+        },
+    ) as response:
+        body = "".join(response.iter_text())
+    messages = [
+        json.loads(line[len("data: ") :])
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    result = next(m["result"] for m in messages if m.get("kind") == "result")
+    assert result["replay"] is True
+    assert result["delivery_tier"] == "tier_2"
+    assert result["settlement_count"] == 1
+    assert result["data_bundle"]["records"]
+
+
 def test_importing_orchestrator_never_leaks_the_real_env_file(monkeypatch):
     """Regression guard: apps.orchestrator.main calls load_dotenv() at import time,
     which must never repopulate a real API key into a test process. See
@@ -134,7 +166,6 @@ def test_importing_orchestrator_never_leaks_the_real_env_file(monkeypatch):
     import sys
 
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     sys.modules.pop("apps.orchestrator.main", None)
     importlib.import_module("apps.orchestrator.main")
 
