@@ -10,5 +10,7 @@ streamlit
 plotly>=5.20,<7
 langgraph>=0.2,<0.7
 langchain-core>=0.3,<0.4
-langchain-groq>=0.2,<0.4
+# Both supported LLM providers (Groq, Gemini) expose an OpenAI-compatible chat
+# completion endpoint, so one client library covers either. See ledger402/llm.py.
+langchain-openai>=0.2,<0.4
 pytest

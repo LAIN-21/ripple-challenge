@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ledger402 import REPO_ROOT, llm, tasks
+from ledger402 import network as xrpl_network
 from ledger402.graph import DEFAULT_BUDGET_DROPS, run_agent, stream_agent
 from ledger402.models import ResearchRequest
 
@@ -40,8 +41,10 @@ def capabilities() -> dict:
     return {
         "supported_task_types": list(tasks.SUPPORTED_TASK_TYPES),
         "llm_enabled": llm.is_enabled(),
+        "llm_provider": llm.provider_name() or None,
         "llm_model": llm.model_name() if llm.is_enabled() else None,
         "llm_role": "question classification and report writing only; never spending",
+        "network": xrpl_network.current_status(),
     }
 
 
