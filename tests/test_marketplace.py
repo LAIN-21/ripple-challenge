@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ledger402 import marketplace, providers
@@ -44,7 +45,8 @@ def test_upload_appends_into_the_live_registry_and_catalog():
     assert body["price_drops"] == 400
     assert body["endpoint"] == f"/api/b2c/{dataset_id}"
     assert body["curator_address"]
-    assert body["settlement_mode"] in {"direct", "escrow"}
+    assert body["settlement_mode"] == "escrow"
+    assert body["pay_to"] == "rMerchantPayToAddressForTests"
 
     catalog = {p["id"]: p for p in client.get("/catalog").json()["providers"]}
     assert dataset_id in catalog
@@ -73,3 +75,66 @@ def test_core_b2b_weights_sum_to_one_and_b2c_weights_are_extra():
     assert sum(CORE_SIGNAL_WEIGHTS.values()) == 1.0
     extras = set(PORT_CONGESTION_SPEC.signal_weights) - set(CORE_SIGNAL_WEIGHTS)
     assert extras == {"customs_dwell", "chassis_availability", "inspection_backlog"}
+
+
+def test_provision_always_escrows_to_xrpl_pay_to_and_discards_seed():
+    wallet = marketplace.provision_curator_wallet()
+    assert wallet["settlement_mode"] == "escrow"
+    assert wallet["pay_to"] == "rMerchantPayToAddressForTests"
+    assert wallet["curator_address"]
+    assert wallet["seed"] is None
+
+
+def test_provision_fails_closed_without_merchant(monkeypatch):
+    monkeypatch.delenv("XRPL_PAY_TO", raising=False)
+    with pytest.raises(ValueError, match="XRPL_PAY_TO"):
+        marketplace.provision_curator_wallet()
+
+
+def test_paid_b2c_get_credits_royalty_once(monkeypatch):
+    import server as server_mod
+
+    monkeypatch.setattr(server_mod, "_verify_tx_hash", lambda tx_hash, spec: True)
+    client = TestClient(gateway)
+    uploaded = client.post(
+        "/api/b2c/upload",
+        files={"file": ("sample_b2c_customs.csv", SAMPLE.read_bytes(), "text/csv")},
+    )
+    dataset_id = uploaded.json()["dataset_id"]
+    unlocked = client.get(
+        f"/api/b2c/{dataset_id}",
+        headers={"x402-Tx-Hash": "C" * 64},
+    )
+    assert unlocked.status_code == 200
+    rows = {row["dataset_id"]: row for row in client.get("/royalties").json()["royalties"]}
+    assert rows[dataset_id]["accrued_drops"] == 400
+    assert rows[dataset_id]["settlements"] == 1
+
+
+def test_read_upload_rejects_bytes_over_the_cap():
+    import asyncio
+
+    from fastapi import HTTPException
+    import server as server_mod
+
+    class Fake:
+        async def read(self, n):
+            return b"x" * n
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(server_mod._read_upload(Fake(), 100))
+    assert exc.value.status_code == 413
+
+
+def test_faucet_failure_still_escrows_and_discards_seed(monkeypatch):
+    monkeypatch.delenv("LEDGER402_SKIP_FAUCET", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("faucet down")
+
+    monkeypatch.setattr("xrpl.wallet.generate_faucet_wallet", boom)
+    wallet = marketplace.provision_curator_wallet(timeout_seconds=0.1)
+    assert wallet["settlement_mode"] == "escrow"
+    assert wallet["pay_to"] == "rMerchantPayToAddressForTests"
+    assert wallet["seed"] is None

@@ -5,9 +5,11 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, BinaryIO, Mapping
 
@@ -128,34 +130,45 @@ def _latest_signals(rows: list[dict[str, Any]]) -> dict[str, float]:
     return signals
 
 
+log = logging.getLogger(__name__)
+
+
 def provision_curator_wallet(*, timeout_seconds: float = 8.0) -> dict[str, Any]:
-    """Hybrid: try the Testnet faucet, else an unfunded display address + escrow."""
-    del timeout_seconds
+    """Mint a display curator address; payouts escrow to XRPL_PAY_TO.
+
+    Generated seeds are discarded. Direct settlement is never advertised for an
+    address this process cannot spend from.
+    """
     pay_to_env = (os.getenv("XRPL_PAY_TO") or "").strip()
+    if not pay_to_env:
+        raise ValueError(
+            "XRPL_PAY_TO is required for B2C escrow settlement.\n"
+            "Run `make wallet-setup` and copy the merchant address into `.env`."
+        )
     skip_faucet = bool(os.getenv("LEDGER402_SKIP_FAUCET") or os.getenv("PYTEST_CURRENT_TEST"))
+    curator_address = None
     if not skip_faucet:
         try:
             from xrpl.clients import JsonRpcClient
             from xrpl.wallet import generate_faucet_wallet
 
-            rpc = os.getenv("XRPL_RPC_URL", "https://s.altnet.rippletest.net:51234/")
-            client = JsonRpcClient(rpc)
-            wallet = generate_faucet_wallet(client, debug=False)
-            return {
-                "curator_address": wallet.classic_address,
-                "pay_to": wallet.classic_address,
-                "settlement_mode": "direct",
-                "seed": wallet.seed,
-            }
-        except Exception:
-            pass
-    wallet = Wallet.create()
-    pay_to = pay_to_env or wallet.classic_address
+            def _faucet():
+                rpc = os.getenv("XRPL_RPC_URL", "https://s.altnet.rippletest.net:51234/")
+                client = JsonRpcClient(rpc)
+                return generate_faucet_wallet(client, debug=False)
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                wallet = pool.submit(_faucet).result(timeout=timeout_seconds)
+            curator_address = wallet.classic_address
+        except Exception as exc:
+            log.info("Testnet faucet unavailable; using a display address + escrow: %s", exc)
+    if curator_address is None:
+        curator_address = Wallet.create().classic_address
     return {
-        "curator_address": wallet.classic_address,
-        "pay_to": pay_to,
-        "settlement_mode": "escrow" if pay_to_env else "direct",
-        "seed": wallet.seed,
+        "curator_address": curator_address,
+        "pay_to": pay_to_env,
+        "settlement_mode": "escrow",
+        "seed": None,
     }
 
 

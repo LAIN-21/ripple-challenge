@@ -1,6 +1,7 @@
 import pytest
 
-from ledger402 import payment
+from ledger402 import marketplace, payment
+from server import reset_consumed_hashes
 
 
 @pytest.fixture(autouse=True)
@@ -29,20 +30,12 @@ def provider_bases(monkeypatch):
 @pytest.fixture(autouse=True)
 def clean_payment_cache():
     payment.reset_cache()
-    try:
-        from ledger402 import marketplace
-
-        marketplace.reset()
-    except Exception:
-        pass
+    marketplace.reset()
+    reset_consumed_hashes()
     yield
     payment.reset_cache()
-    try:
-        from ledger402 import marketplace
-
-        marketplace.reset()
-    except Exception:
-        pass
+    marketplace.reset()
+    reset_consumed_hashes()
 
 
 SATELLITE_BODY = {

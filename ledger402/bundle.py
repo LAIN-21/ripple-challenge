@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import io
@@ -59,10 +60,13 @@ def _to_parquet(records: Sequence[dict[str, Any]]) -> bytes | None:
         import pyarrow.parquet as pq
     except ImportError:
         return None
-    table = pa.Table.from_pylist([dict(row) for row in records])
-    buf = io.BytesIO()
-    pq.write_table(table, buf)
-    return buf.getvalue()
+    try:
+        table = pa.Table.from_pylist([dict(row) for row in records])
+        buf = io.BytesIO()
+        pq.write_table(table, buf)
+        return buf.getvalue()
+    except Exception:
+        return None
 
 
 def to_csv(records: Sequence[dict[str, Any]]) -> str:
@@ -130,5 +134,5 @@ def build_bundle(
     }
     parquet = _to_parquet(records)
     if parquet is not None:
-        bundle["parquet"] = parquet
+        bundle["parquet"] = base64.b64encode(parquet).decode("ascii")
     return bundle

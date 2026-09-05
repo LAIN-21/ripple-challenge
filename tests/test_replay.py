@@ -58,3 +58,42 @@ def test_replay_helper_picks_canonical_hashes_for_the_092_run():
     single = replay.settlement_for("satellite_logistics_paid", target_confidence=0.85, index=0)
     assert single["tx_hash"] == SATELLITE_TX
     assert single["ledger_index"] == 20493969
+
+
+def test_canonical_replay_rejects_index_beyond_two():
+    with pytest.raises(ValueError, match="two recorded settlements"):
+        replay.settlement_for("satellite_logistics_paid", target_confidence=0.92, index=2)
+
+
+def test_replay_purchase_builds_odrl(forbid_live_purchase):
+    from ledger402.providers import get_provider
+
+    provider = get_provider("satellite_logistics_paid")
+    replayed = replay.replay_purchase(provider, index=0, target_confidence=0.85)
+    policy = replayed["body"]["odrl"]
+    assert policy["@type"] == "Agreement"
+    assert policy["ledger402:settlement"]["price_drops"] == 1200
+
+
+def test_replay_records_odrl_on_the_purchase(forbid_live_purchase):
+    result = graph.run_agent(
+        question=QUESTION,
+        budget_drops=5000,
+        target_confidence=0.85,
+        replay=True,
+    )
+    success = [p for p in result["purchases"] if p.get("status") == "SUCCESS"]
+    assert success
+    assert success[0]["odrl"]["@type"] == "Agreement"
+
+
+def test_replay_never_credits_royalties(forbid_live_purchase):
+    from ledger402 import marketplace
+
+    graph.run_agent(
+        question=QUESTION,
+        budget_drops=5000,
+        target_confidence=0.85,
+        replay=True,
+    )
+    assert marketplace.royalties() == []

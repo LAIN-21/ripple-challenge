@@ -6,6 +6,7 @@ from typing import Any
 
 from providers_data import OFFLINE_REPLAY_SETTLEMENTS, PROVIDERS_REGISTRY
 
+from ledger402 import odrl
 from ledger402.payment import EXPLORER_TX, SUCCESS
 from ledger402.providers import flatten_payload
 
@@ -13,6 +14,11 @@ from ledger402.providers import flatten_payload
 def settlement_for(provider_id: str, *, target_confidence: float, index: int) -> dict[str, Any]:
     """Pick the recorded hash for this purchase in a replayed run."""
     if target_confidence >= 0.90:
+        if index not in (0, 1):
+            raise ValueError(
+                "Canonical 0.92 replay only has two recorded settlements; "
+                f"index {index} would reuse a hash."
+            )
         canonical = OFFLINE_REPLAY_SETTLEMENTS["canonical_target_92"]
         tx = canonical["tx_1"] if index == 0 else canonical["tx_2"]
         amount = 1200 if index == 0 else 600
@@ -41,7 +47,12 @@ def replay_purchase(provider: dict[str, Any], *, index: int, target_confidence: 
     settled = settlement_for(provider_id, target_confidence=target_confidence, index=index)
     tx = str(settled.get("tx_hash") or "")
     body = recorded_payload(provider_id)
-    body["odrl"] = body.get("odrl")
+    body["odrl"] = odrl.agreement(
+        provider_id=provider_id,
+        dataset_id=provider_id,
+        price_drops=price,
+        purpose="commercialDerivative",
+    )
     return {
         "state": SUCCESS,
         "tx_hash": tx,

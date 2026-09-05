@@ -31,7 +31,6 @@ from langgraph.graph import END, StateGraph
 
 from ledger402 import audit, classify, confidence as conf, payment, providers, ranking, synthesis, tasks
 from ledger402 import bundle as bundle_mod
-from ledger402 import marketplace
 from ledger402 import replay as replay_mod
 from ledger402.confidence import EvidenceItem
 from ledger402.tasks import TaskSpec
@@ -347,11 +346,26 @@ def procure(state: AgentState) -> dict[str, Any]:
         successful_so_far = len(
             [p for p in purchases if p.get("status") == payment.SUCCESS]
         )
-        replayed = replay_mod.replay_purchase(
-            provider,
-            index=successful_so_far,
-            target_confidence=float(state.get("target_confidence") or 0),
-        )
+        try:
+            replayed = replay_mod.replay_purchase(
+                provider,
+                index=successful_so_far,
+                target_confidence=float(state.get("target_confidence") or 0),
+            )
+        except ValueError as exc:
+            record(payment.FAILED, error=str(exc), replay=True)
+            audit.add(
+                log,
+                "PROCUREMENT_FAILED",
+                provider_id=provider.get("id"),
+                reason=str(exc),
+                replay=True,
+            )
+            return {
+                "purchases": purchases,
+                "purchased_ids": purchased_ids,
+                "stop_reason": str(exc),
+            }
         audit.add(log, "HTTP_402_OBSERVED", status_code=402, note="Replay: recorded 402.")
         audit.add(log, "X402_PAYMENT_NEGOTIATION_STARTED", url=str(provider.get("path")))
         tx = replayed["tx_hash"]
@@ -359,6 +373,7 @@ def procure(state: AgentState) -> dict[str, Any]:
             payment.SUCCESS,
             transaction_hash=tx,
             explorer_url=replayed.get("explorer_url"),
+            odrl=replayed["body"].get("odrl"),
             replay=True,
         )
         audit.add(
@@ -379,8 +394,6 @@ def procure(state: AgentState) -> dict[str, Any]:
                 price_drops=price,
             )
         )
-        if str(provider.get("id", "")).startswith("b2c_"):
-            marketplace.credit_royalty(str(provider.get("id")), drops=price, tx_hash=tx)
         return {
             "purchases": purchases,
             "purchased_ids": purchased_ids,
@@ -466,10 +479,6 @@ def procure(state: AgentState) -> dict[str, Any]:
             price_drops=price,
         )
     )
-    if str(provider.get("id", "")).startswith("b2c_"):
-        marketplace.credit_royalty(
-            str(provider.get("id")), drops=price, tx_hash=result.tx_hash
-        )
 
     # Procurement budget only. The XRPL network fee is tracked separately and never
     # folded into the remaining budget.

@@ -46,6 +46,13 @@ def xrp(drops: float) -> str:
     return f"{drops / DROPS_PER_XRP:.4f} XRP"
 
 
+@st.cache_data(ttl=15)
+def fetch_royalties() -> dict:
+    response = requests.get(f"{GATEWAY.rstrip('/')}/royalties", timeout=5)
+    response.raise_for_status()
+    return response.json()
+
+
 def fetch_capabilities() -> dict:
     try:
         response = requests.get(f"{ORCH.rstrip('/')}/capabilities", timeout=5)
@@ -184,6 +191,8 @@ with left:
     max_purchases = st.number_input("Max settlements per run", min_value=0, max_value=5, value=3, step=1)
     if st.button("Run research", type="primary"):
         st.session_state.pop("error", None)
+        st.session_state.pop("result", None)
+        st.session_state.pop("tier", None)
         try:
             _events, result, error = run_stream(
                 {
@@ -342,10 +351,10 @@ with right:
             st.write(f"**Price:** {listing.get('price_drops')} drops")
             st.caption(f"Settlement mode: {listing.get('settlement_mode')}")
         try:
-            roy = requests.get(f"{GATEWAY.rstrip('/')}/royalties", timeout=5).json()
+            roy = fetch_royalties()
             rows = roy.get("royalties") or []
             if rows:
                 st.markdown("**Micro-royalties**")
                 st.dataframe(rows, width="stretch", hide_index=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            st.caption(f"Royalties unavailable: {exc}")

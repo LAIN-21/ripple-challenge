@@ -78,9 +78,16 @@ def _extract_subject(question: str) -> str | None:
         if word.lower().strip("()?") == "port":
             rest = words[index + 1].strip("?'\"")
             if rest.lower() == "of" and index + 2 < len(words):
-                place = words[index + 2].strip("?'\"")
-                if place:
-                    return f"Port of {place}"
+                names: list[str] = []
+                cursor = index + 2
+                while cursor < len(words):
+                    token = words[cursor].strip("?'\"")
+                    if not token or not token[0].isupper():
+                        break
+                    names.append(token)
+                    cursor += 1
+                if names:
+                    return f"Port of {' '.join(names)}"
             if rest and rest[0].isupper():
                 return f"Port {rest}"
     return None

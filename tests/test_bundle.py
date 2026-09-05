@@ -33,6 +33,17 @@ def test_matching_sgsin_subject_is_not_an_entity_mismatch():
     assert synthesis.entity_mismatch("Port Klang", [FREE, SATELLITE])
 
 
+def test_port_of_los_angeles_with_sgsin_evidence_is_unclear():
+    report = synthesis.synthesize(
+        [FREE, SATELLITE],
+        question="Is Port of Los Angeles facing critical yard congestion?",
+        confidence=0.87,
+        subject="Port of Los Angeles",
+    )
+    assert report.verdict == "UNCLEAR / INSUFFICIENT_EVIDENCE"
+    assert report.method == "template"
+
+
 def test_tier_1_returns_a_report_not_a_table(paying_agent):  # noqa: F811
     result = graph.run_agent(
         question=QUESTION,
@@ -92,3 +103,39 @@ def test_bundle_join_carries_tx_hash_and_integrity_digest():
     assert len(built["integrity_hash"]) == 64
     assert built["odrl"]["permission"]
     assert any(p.get("action") == "derive" for p in built["odrl"]["permission"])
+    assert built["json"]
+    assert built["csv"]
+    parquet = built.get("parquet")
+    assert parquet is None or isinstance(parquet, str)
+
+
+def test_parquet_bytes_are_base64_encoded(monkeypatch):
+    monkeypatch.setattr(bundle, "_to_parquet", lambda records: b"\x00\x01")
+    built = bundle.build_bundle(
+        [FREE, SATELLITE],
+        purchases=[],
+        question=QUESTION,
+        subject="Port X",
+        confidence=0.87,
+    )
+    assert built["parquet"] == "AAE="
+    assert built["json"]
+    assert built["csv"]
+
+
+def test_parquet_write_failure_still_returns_json_and_csv(monkeypatch):
+    monkeypatch.setattr(bundle, "_to_parquet", lambda records: None)
+    built = bundle.build_bundle(
+        [FREE, SATELLITE],
+        purchases=[],
+        question=QUESTION,
+        subject="Port X",
+        confidence=0.87,
+    )
+    assert "parquet" not in built
+    assert built["json"]
+    assert built["csv"].startswith("provider_id")
+
+
+def test_to_parquet_returns_none_when_rows_cannot_be_written():
+    assert bundle._to_parquet([{"nested": object()}]) is None

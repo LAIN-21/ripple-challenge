@@ -132,3 +132,133 @@ def test_odrl_compact_header_is_single_line():
     assert "\n" not in compact
     assert "permit=use,derive" in compact
     assert "prohibit=distribute,aggregate" in compact
+
+
+MERCHANT = "rMerchantPayToAddressForTests"
+
+
+def _xrpl_payment(
+    *,
+    dest=MERCHANT,
+    drops="1200",
+    validated=True,
+    result="tesSUCCESS",
+    delivered=None,
+    tx_type="Payment",
+):
+    if delivered is None:
+        delivered = drops
+    return {
+        "validated": validated,
+        "tx_json": {
+            "TransactionType": tx_type,
+            "Destination": dest,
+            "Amount": drops,
+        },
+        "meta": {
+            "TransactionResult": result,
+            "delivered_amount": delivered,
+        },
+    }
+
+
+def test_issued_currency_delivered_amount_does_not_unlock(monkeypatch):
+    import server as server_mod
+
+    monkeypatch.setattr(
+        server_mod,
+        "_fetch_tx_result",
+        lambda tx: _xrpl_payment(
+            delivered={"currency": "USD", "value": "1.2", "issuer": "rIssuer"}
+        ),
+    )
+    client = TestClient(gateway)
+    response = client.get(
+        "/api/b2b/satellite-logistics",
+        headers={"x402-Tx-Hash": "A" * 64},
+    )
+    assert response.status_code == 402
+
+
+def test_unvalidated_tx_does_not_unlock(monkeypatch):
+    import server as server_mod
+
+    monkeypatch.setattr(
+        server_mod, "_fetch_tx_result", lambda tx: _xrpl_payment(validated=False)
+    )
+    client = TestClient(gateway)
+    response = client.get(
+        "/api/b2b/satellite-logistics",
+        headers={"x402-Tx-Hash": "B" * 64},
+    )
+    assert response.status_code == 402
+
+
+def test_tec_result_does_not_unlock(monkeypatch):
+    import server as server_mod
+
+    monkeypatch.setattr(
+        server_mod,
+        "_fetch_tx_result",
+        lambda tx: _xrpl_payment(result="tecPATH_DRY"),
+    )
+    client = TestClient(gateway)
+    response = client.get(
+        "/api/b2b/satellite-logistics",
+        headers={"x402-Tx-Hash": "C" * 64},
+    )
+    assert response.status_code == 402
+
+
+def test_destination_mismatch_does_not_unlock(monkeypatch):
+    import server as server_mod
+
+    monkeypatch.setattr(
+        server_mod,
+        "_fetch_tx_result",
+        lambda tx: _xrpl_payment(dest="rWrongDestinationAddress111111111"),
+    )
+    client = TestClient(gateway)
+    response = client.get(
+        "/api/b2b/satellite-logistics",
+        headers={"x402-Tx-Hash": "D" * 64},
+    )
+    assert response.status_code == 402
+
+
+def test_missing_destination_does_not_unlock(monkeypatch):
+    import server as server_mod
+
+    monkeypatch.setattr(
+        server_mod, "_fetch_tx_result", lambda tx: _xrpl_payment(dest="")
+    )
+    client = TestClient(gateway)
+    response = client.get(
+        "/api/b2b/satellite-logistics",
+        headers={"x402-Tx-Hash": "E" * 64},
+    )
+    assert response.status_code == 402
+
+
+def test_valid_payment_hash_unlocks_once_then_is_consumed(monkeypatch):
+    import server as server_mod
+
+    monkeypatch.setattr(server_mod, "_fetch_tx_result", lambda tx: _xrpl_payment())
+    client = TestClient(gateway)
+    headers = {"x402-Tx-Hash": "1" * 64}
+    first = client.get("/api/b2b/satellite-logistics", headers=headers)
+    assert first.status_code == 200
+    reused = client.get("/api/b2b/satellite-logistics", headers=headers)
+    assert reused.status_code == 402
+
+
+def test_consumed_hash_cannot_unlock_a_second_feed(monkeypatch):
+    import server as server_mod
+
+    monkeypatch.setattr(server_mod, "_verify_tx_hash", lambda tx_hash, spec: True)
+    client = TestClient(gateway)
+    headers = {"x402-Tx-Hash": "2" * 64}
+    first = client.get("/api/b2b/satellite-logistics", headers=headers)
+    assert first.status_code == 200
+    second = client.get("/api/b2b/terminal-telemetry", headers=headers)
+    assert second.status_code == 402

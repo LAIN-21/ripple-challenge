@@ -35,6 +35,14 @@ def test_psa_question_extracts_the_singapore_subject():
     assert result.subject == "Port of Singapore (PSA)"
 
 
+def test_port_of_los_angeles_keeps_the_full_name():
+    result = classify.classify(
+        "Is Port of Los Angeles facing critical yard and terminal congestion?"
+    )
+    assert result.supported
+    assert result.subject == "Port of Los Angeles"
+
+
 @pytest.mark.parametrize(
     "question",
     [
