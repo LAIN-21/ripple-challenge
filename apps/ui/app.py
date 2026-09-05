@@ -81,8 +81,8 @@ if capabilities.get("llm_enabled"):
     )
 else:
     st.caption(
-        "Reasoning: LangGraph loop, fully deterministic (no GROQ_API_KEY/GEMINI_API_KEY set). "
-        "Classification and report writing use rule-based fallbacks."
+        "Reasoning: LangGraph loop. LLM unavailable — classification and report writing "
+        "use rule-based fallbacks. Spending decisions stay deterministic."
     )
 
 st.info(

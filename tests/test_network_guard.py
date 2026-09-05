@@ -43,6 +43,14 @@ def test_unknown_host_is_refused_not_allowed():
         network.assert_testnet("https://some-new-rpc.example.com/", "xrpl:1")
 
 
+def test_loopback_rpc_is_refused_even_with_a_testnet_id():
+    """A localhost proxy can front Mainnet; the allowlist must not treat loopback as Testnet."""
+    with pytest.raises(network.NonTestnetBlocked):
+        network.assert_testnet("http://localhost:5005/", "xrpl:1")
+    with pytest.raises(network.NonTestnetBlocked):
+        network.assert_testnet("http://127.0.0.1:5005/", "xrpl:1")
+
+
 def test_explicit_override_permits_other_networks(monkeypatch):
     """A guard nobody can disable gets deleted; the opt-in is loud and documented."""
     monkeypatch.setenv(network.ALLOW_OVERRIDE_ENV, "1")
@@ -86,3 +94,21 @@ def test_status_reports_the_current_posture(monkeypatch):
 
     monkeypatch.setenv("XRPL_RPC_URL", MAINNET_RPC)
     assert network.current_status()["is_testnet"] is False
+
+
+def test_status_redacts_embedded_rpc_credentials(monkeypatch):
+    """/capabilities must never echo userinfo from XRPL_RPC_URL."""
+    monkeypatch.setenv(
+        "XRPL_RPC_URL", "https://operator:super-secret-token@s.altnet.rippletest.net:51234/"
+    )
+    monkeypatch.setenv("XRPL_NETWORK", "xrpl:1")
+    status = network.current_status()
+    assert "super-secret-token" not in status["rpc_url"]
+    assert "operator" not in status["rpc_url"]
+    assert "s.altnet.rippletest.net" in status["rpc_url"]
+    assert status["is_testnet"] is True
+    described = network.describe(
+        "https://operator:super-secret-token@s.altnet.rippletest.net:51234/", "xrpl:1"
+    )
+    assert "super-secret-token" not in described
+    assert "operator" not in described

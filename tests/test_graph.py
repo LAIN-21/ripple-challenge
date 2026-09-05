@@ -234,6 +234,30 @@ def test_missing_wallet_is_a_config_error_not_a_crash(monkeypatch, free_provider
     assert result["report"] is not None
 
 
+def test_blocked_network_is_fatal_and_does_not_try_remaining_providers(
+    monkeypatch, free_provider_up
+):
+    """CONFIG_ERROR must stop the loop; ranking the next provider would bury the reason."""
+    attempts: list[str] = []
+
+    def blocked(*, provider_id, **kwargs):
+        attempts.append(provider_id)
+        return payment.PurchaseRecord(
+            state=payment.CONFIG_ERROR,
+            error="Refusing to sign: Ledger402 settles on XRPL test networks only.",
+        )
+
+    monkeypatch.setattr(payment, "purchase_premium", blocked)
+    result = graph.run_agent(question=QUESTION, budget_drops=5000, target_confidence=0.95)
+
+    assert attempts == ["satellite-logistics-intel"]
+    assert "test networks only" in (result["stop_reason"] or "")
+    assert "test networks only" in (result["configuration_error"] or "")
+    assert "No remaining provider" not in (result["stop_reason"] or "")
+    types = [event["type"] for event in result["event_log"]]
+    assert "PROCUREMENT_ABORTED" in types
+
+
 def test_public_source_down_still_produces_an_answer(monkeypatch):
     def boom(url, timeout=None):
         raise RuntimeError("free provider down")

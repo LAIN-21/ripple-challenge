@@ -14,9 +14,10 @@ day, so there is an explicit, loud opt-in instead.
 from __future__ import annotations
 
 import os
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
-# Public XRPL test network JSON-RPC hosts.
+# Public XRPL test network JSON-RPC hosts. Loopback is excluded on purpose: a local
+# proxy can front Mainnet while XRPL_NETWORK still says xrpl:1.
 TESTNET_RPC_HOSTS = frozenset(
     {
         "s.altnet.rippletest.net",
@@ -24,9 +25,6 @@ TESTNET_RPC_HOSTS = frozenset(
         "testnet.xrpl-labs.com",
         "clio.altnet.rippletest.net",
         "clio.devnet.rippletest.net",
-        # Local or containerised standalone ledgers used in development.
-        "localhost",
-        "127.0.0.1",
     }
 )
 
@@ -56,8 +54,21 @@ def is_testnet_network(network: str) -> bool:
     return (network or "").strip().lower() in TESTNET_NETWORK_IDS
 
 
+def redact_rpc_url(rpc_url: str) -> str:
+    """Strip username/password so the URL is safe to put in /capabilities or errors."""
+    parsed = urlparse(rpc_url)
+    if parsed.username is None and parsed.password is None:
+        return rpc_url
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return urlunparse(parsed._replace(netloc=f"***:***@{host}"))
+
+
 def describe(rpc_url: str, network: str) -> str:
-    return f"XRPL_RPC_URL={rpc_url!r}, XRPL_NETWORK={network!r}"
+    return f"XRPL_RPC_URL={redact_rpc_url(rpc_url)!r}, XRPL_NETWORK={network!r}"
 
 
 def assert_testnet(rpc_url: str, network: str) -> None:
@@ -95,7 +106,7 @@ def current_status() -> dict[str, object]:
     rpc = os.getenv("XRPL_RPC_URL", "https://s.altnet.rippletest.net:51234/")
     network = os.getenv("XRPL_NETWORK", "xrpl:1")
     return {
-        "rpc_url": rpc,
+        "rpc_url": redact_rpc_url(rpc),
         "network": network,
         "is_testnet": is_testnet_rpc(rpc) and is_testnet_network(network),
         "override_enabled": override_enabled(),

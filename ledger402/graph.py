@@ -354,11 +354,16 @@ def procure(state: AgentState) -> dict[str, Any]:
             state=result.state,
             reason=result.error,
         )
-        return {
+        update: dict[str, Any] = {
             "purchases": purchases,
             "purchased_ids": purchased_ids,
             "stop_reason": result.error or "Procurement did not succeed.",
         }
+        if result.state == payment.CONFIG_ERROR:
+            # A blocked network (or similar) will not repair itself; ranking the next
+            # provider would bury the actionable configuration error.
+            update["fatal_error"] = result.error
+        return update
 
     record(
         payment.SUCCESS,
