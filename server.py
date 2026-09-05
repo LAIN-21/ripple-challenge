@@ -201,8 +201,10 @@ async def payment_gate(request: Request, call_next):
         return await call_next(request)
 
     alt_hash = _header(request, "x402-Tx-Hash") or _header(request, "PAYMENT-SIGNATURE")
-    if alt_hash and _verify_tx_hash(alt_hash, spec) and consume_hash(alt_hash):
-        return await call_next(request)
+    if alt_hash:
+        verified = await run_in_threadpool(_verify_tx_hash, alt_hash, spec)
+        if verified and consume_hash(alt_hash):
+            return await call_next(request)
 
     try:
         gate = _gate_for(path, spec)

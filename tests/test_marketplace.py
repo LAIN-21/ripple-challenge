@@ -138,3 +138,24 @@ def test_faucet_failure_still_escrows_and_discards_seed(monkeypatch):
     assert wallet["settlement_mode"] == "escrow"
     assert wallet["pay_to"] == "rMerchantPayToAddressForTests"
     assert wallet["seed"] is None
+
+
+def test_hung_faucet_returns_escrow_within_deadline(monkeypatch):
+    import threading
+    import time
+
+    monkeypatch.delenv("LEDGER402_SKIP_FAUCET", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    released = threading.Event()
+
+    def hang(*args, **kwargs):
+        released.wait(timeout=5)
+
+    monkeypatch.setattr("xrpl.wallet.generate_faucet_wallet", hang)
+    started = time.monotonic()
+    wallet = marketplace.provision_curator_wallet(timeout_seconds=0.2)
+    elapsed = time.monotonic() - started
+    released.set()
+    assert elapsed < 1.5
+    assert wallet["settlement_mode"] == "escrow"
+    assert wallet["seed"] is None

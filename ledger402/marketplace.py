@@ -148,6 +148,8 @@ def provision_curator_wallet(*, timeout_seconds: float = 8.0) -> dict[str, Any]:
     skip_faucet = bool(os.getenv("LEDGER402_SKIP_FAUCET") or os.getenv("PYTEST_CURRENT_TEST"))
     curator_address = None
     if not skip_faucet:
+        pool = None
+        timed_out = False
         try:
             from xrpl.clients import JsonRpcClient
             from xrpl.wallet import generate_faucet_wallet
@@ -157,11 +159,20 @@ def provision_curator_wallet(*, timeout_seconds: float = 8.0) -> dict[str, Any]:
                 client = JsonRpcClient(rpc)
                 return generate_faucet_wallet(client, debug=False)
 
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                wallet = pool.submit(_faucet).result(timeout=timeout_seconds)
+            pool = ThreadPoolExecutor(max_workers=1)
+            wallet = pool.submit(_faucet).result(timeout=timeout_seconds)
             curator_address = wallet.classic_address
+        except TimeoutError:
+            timed_out = True
+            log.info(
+                "Testnet faucet exceeded %.1fs; using a display address + escrow",
+                timeout_seconds,
+            )
         except Exception as exc:
             log.info("Testnet faucet unavailable; using a display address + escrow: %s", exc)
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=not timed_out, cancel_futures=True)
     if curator_address is None:
         curator_address = Wallet.create().classic_address
     return {
