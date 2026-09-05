@@ -136,7 +136,9 @@ def test_financial_summary_includes_fees_and_anchor():
     invoice = generate_procurement_invoice(state)
     summary = invoice["financial_summary"]
     assert summary["total_network_fee_drops"] == 20  # 10 drops x 2 settlements
-    assert summary["protocol_fee_drops"] == round(1800 * 0.025, 2)
+    assert summary["protocol_fee_drops"] == 45  # 2.5% of 1800, whole drops
+    assert summary["protocol_fee_collected"] is False
+    assert summary["net_settlement_drops"] == 1820  # data cost + network fee only
     assert summary["composite_ledger_anchor_hash"] == "F" * 64
     assert summary["final_confidence"] == 0.92
 
@@ -147,4 +149,19 @@ def test_exports_include_markdown_and_json():
     assert invoice["invoice_id"] == "INV-402-test-run-1"
     assert "Institutional Procurement Invoice" in invoice["markdown"]
     assert "Satellite Logistics Intelligence" in invoice["markdown"]
+    assert "not collected on-ledger" in invoice["markdown"]
     assert '"total_drops_spent": 1800' in invoice["json"]
+    assert '"protocol_fee_drops": 45' in invoice["json"]
+    assert '"net_settlement_drops": 1820' in invoice["json"]
+
+
+def test_seller_address_falls_back_to_xrpl_pay_to(monkeypatch):
+    state, _, _ = _state()
+    for provider in state["catalog"]:
+        provider.pop("pay_to", None)
+    monkeypatch.setenv("XRPL_PAY_TO", "rFallbackMerchantAddressForInvoice")
+    invoice = generate_procurement_invoice(state)
+    assert all(
+        item["seller_address"] == "rFallbackMerchantAddressForInvoice"
+        for item in invoice["line_items"]
+    )

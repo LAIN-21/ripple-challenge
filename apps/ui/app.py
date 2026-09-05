@@ -41,6 +41,7 @@ EVENT_LABELS = {
 }
 
 AUDIT_MEMO_TYPE_HEX = "6C65646765723430323A6175646974"
+LOG_EXTRAS = ("reason", "tx_hash", "price_drops", "status_code")
 
 st.set_page_config(page_title="Ledger402", layout="wide")
 
@@ -112,7 +113,84 @@ def advisory_markdown(result: dict) -> str:
     return "\n".join(lines)
 
 
-def run_stream(payload: dict):
+def event_clock(event: dict) -> str:
+    at = str(event.get("at") or "")
+    if "T" in at:
+        return at.split("T", 1)[1][:8]
+    return at[-8:] if len(at) >= 8 else at
+
+
+def format_event_line(event: dict) -> str:
+    label = EVENT_LABELS.get(event.get("type"), event.get("type") or "event")
+    detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
+    extras = [
+        f"{key}={detail[key]}"
+        for key in LOG_EXTRAS
+        if detail.get(key) not in (None, "")
+    ]
+    suffix = f" · {' · '.join(extras)}" if extras else ""
+    return f"{event_clock(event)} · {label}{suffix}"
+
+
+def render_live_log(events: list[dict], *, limit: int | None = 8) -> None:
+    visible = events[-limit:] if limit else events
+    if not visible:
+        st.caption("Execution trace appears here after a run.")
+        return
+    st.markdown("\n".join(f"- `{format_event_line(event)}`" for event in visible))
+
+
+def render_invoice(invoice: dict, result: dict) -> None:
+    st.subheader(f"Procurement invoice (`{invoice.get('invoice_id')}`)")
+    st.caption(f"Generated {invoice.get('generated_at') or '—'}")
+    line_items = invoice.get("line_items") or []
+    if not line_items:
+        st.info("No on-ledger settlement this run (public-only).")
+
+    for item in line_items:
+        amount = item.get("amount_paid") or {}
+        tx = item.get("tx_hash")
+        pay_to = item.get("seller_address") or "n/a"
+        explorer = item.get("tx_explorer_url") or (EXPLORER_TX.format(hash=tx) if tx else None)
+        with st.container(border=True):
+            st.markdown(f"**{item.get('vendor_name') or item.get('provider_id')}** — {amount.get('drops', 0)} drops")
+            st.caption(f"Seller `pay_to`: `{pay_to}`")
+            if tx and explorer:
+                st.markdown(f"Tx hash: [`{tx}`]({explorer})")
+            elif tx:
+                st.code(tx, language=None)
+            else:
+                st.caption("No transaction hash on this line.")
+
+    summary = invoice.get("financial_summary") or {}
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Data cost (settled)", f"{summary.get('total_drops_spent', 0)} drops")
+    c2.metric("Network fee (settled)", f"{summary.get('total_network_fee_drops', 0)} drops")
+    c3.metric("Protocol take 2.5%", f"{summary.get('protocol_fee_drops', 0)} drops")
+    st.caption(
+        f"Net settlement **{summary.get('net_settlement_drops', 0)} drops** "
+        "(data cost + network fee). Protocol take is disclosed, not collected on-ledger."
+    )
+
+    invoice_json = invoice.get("json") or json.dumps(invoice, indent=2, default=str)
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        st.download_button(
+            "Download invoice JSON",
+            data=invoice_json,
+            file_name=f"Invoice_{result.get('run_id')}.json",
+            mime="application/json",
+        )
+    with dc2:
+        st.download_button(
+            "Download invoice Markdown",
+            data=invoice.get("markdown") or "",
+            file_name=f"Invoice_{result.get('run_id')}.md",
+            mime="text/markdown",
+        )
+
+
+def run_stream(payload: dict, log_box=None):
     params = {
         "question": payload["question"],
         "budget_drops": payload["budget_drops"],
@@ -124,7 +202,7 @@ def run_stream(payload: dict):
     events: list[dict] = []
     result = None
     error = None
-    log_box = st.empty()
+    log_box = log_box or st.empty()
     with requests.get(
         f"{ORCH.rstrip('/')}/research/stream",
         params=params,
@@ -142,9 +220,7 @@ def run_stream(payload: dict):
             if kind == "event":
                 events.append(chunk.get("event") or {})
                 with log_box.container():
-                    for event in events[-12:]:
-                        label = EVENT_LABELS.get(event.get("type"), event.get("type"))
-                        st.caption(f"{event.get('at', '')} · {label}")
+                    render_live_log(events, limit=8)
             elif kind == "result":
                 result = chunk.get("result")
             elif kind == "error":
@@ -170,6 +246,11 @@ st.info(
 
 left, center, right = st.columns([1.1, 2.0, 1.3])
 
+with right:
+    st.subheader("Execution")
+    metrics_box = st.empty()
+    log_box = st.empty()
+
 with left:
     st.subheader("Directive")
     question = st.text_area("Research objective", value=DEFAULT_QUESTION, height=90)
@@ -181,21 +262,23 @@ with left:
         step=0.01,
         help="0.85 settles once (1200 drops). 0.92 settles twice (1800 drops).",
     )
-    tier_label = st.radio(
-        "Output",
-        (
-            "Tier 1: Strategic Advisory Dossier",
-            "Tier 2: Raw Verified Data Bundle",
-        ),
-    )
+    with st.expander("Advanced"):
+        tier_label = st.radio(
+            "Output",
+            (
+                "Tier 1: Strategic Advisory Dossier",
+                "Tier 2: Raw Verified Data Bundle",
+            ),
+        )
+        replay = st.checkbox("Use Offline Replay Mode", value=False)
+        budget = st.number_input("Procurement budget (drops)", min_value=0, value=5000, step=100)
+        max_purchases = st.number_input("Max settlements per run", min_value=0, max_value=5, value=3, step=1)
     delivery_tier = "tier_1" if tier_label.startswith("Tier 1") else "tier_2"
-    replay = st.checkbox("Use Offline Replay Mode", value=False)
-    budget = st.number_input("Procurement budget (drops)", min_value=0, value=5000, step=100)
-    max_purchases = st.number_input("Max settlements per run", min_value=0, max_value=5, value=3, step=1)
     if st.button("Run research", type="primary"):
         st.session_state.pop("error", None)
         st.session_state.pop("result", None)
         st.session_state.pop("tier", None)
+        st.session_state.pop("events", None)
         try:
             _events, result, error = run_stream(
                 {
@@ -205,8 +288,10 @@ with left:
                     "max_purchases": int(max_purchases),
                     "delivery_tier": delivery_tier,
                     "replay": replay,
-                }
+                },
+                log_box=log_box,
             )
+            st.session_state["events"] = _events
             if error:
                 st.session_state["error"] = error
             else:
@@ -296,19 +381,6 @@ with center:
         st.markdown(report.get("summary") or "")
         for line in report.get("evidence") or []:
             st.write(f"- {line}")
-        st.markdown("**Cryptographic verification**")
-        for purchase in result.get("purchases") or []:
-            if purchase.get("status") != "SUCCESS":
-                continue
-            tx = purchase.get("transaction_hash")
-            if tx:
-                st.markdown(
-                    f"- {purchase.get('provider_name')}: "
-                    f"[{tx[:16]}…]({EXPLORER_TX.format(hash=tx)})"
-                )
-        anchor = result.get("audit_anchor") or {}
-        if anchor:
-            st.code(anchor.get("audit_hash", ""), language=None)
         markdown_text = advisory_markdown(result)
         st.download_button(
             "Download Advisory Dossier",
@@ -319,87 +391,29 @@ with center:
 
     invoice = (result or {}).get("invoice") if result and not result.get("error") else None
     if invoice:
-        with st.expander("🧾 Institutional Procurement Invoice & Audit Breakdown", expanded=True):
-            st.caption(f"{invoice.get('invoice_id')} · generated {invoice.get('generated_at')}")
-            line_items = invoice.get("line_items") or []
-            if line_items:
-                st.dataframe(
-                    [
-                        {
-                            "Dataset Source": item.get("vendor_name"),
-                            "Vendor Address": item.get("seller_address") or "n/a",
-                            "Price (Drops / RLUSD)": (
-                                f"{item['amount_paid']['drops']} / "
-                                f"${item['amount_paid']['rlusd_equivalent']:.4f}"
-                            ),
-                            "Signal Impact": ", ".join(item.get("signals_acquired") or []) or "—",
-                            "On-Chain Proof": (item.get("tx_hash") or "—")[:16],
-                        }
-                        for item in line_items
-                    ],
-                    width="stretch",
-                    hide_index=True,
-                )
-                for item in line_items:
-                    if item.get("tx_explorer_url"):
-                        st.caption(
-                            f"{item['vendor_name']} → "
-                            f"[view on XRPL Testnet Explorer]({item['tx_explorer_url']})"
-                        )
-            else:
-                st.caption("No settled purchases this run — invoice covers public evidence only.")
+        render_invoice(invoice, result)
+    elif result and not result.get("error"):
+        st.info("No on-ledger settlement this run (public-only).")
 
-            summary = invoice.get("financial_summary") or {}
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Data cost", f"{summary.get('total_drops_spent', 0)} drops")
-            c2.metric("XRPL network fee", f"{summary.get('total_network_fee_drops', 0)} drops")
-            c3.metric(
-                "Protocol fee (2.5%)", f"{summary.get('protocol_fee_drops', 0):.0f} drops"
-            )
-            st.write(
-                f"**Net settlement:** {summary.get('net_settlement_drops', 0):.0f} drops · "
-                f"**RLUSD volume:** ${summary.get('total_rlusd_volume', 0):.4f} · "
-                f"**Final confidence:** {(summary.get('final_confidence') or 0):.1%}"
-            )
-            st.code(summary.get("composite_ledger_anchor_hash") or "", language=None)
-
-            invoice_json = invoice.get("json") or json.dumps(invoice, indent=2, default=str)
-            dc1, dc2 = st.columns(2)
-            with dc1:
-                st.download_button(
-                    "📥 Download Institutional Invoice (.json)",
-                    data=invoice_json,
-                    file_name=f"Invoice_{result.get('run_id')}.json",
-                    mime="application/json",
-                )
-            with dc2:
-                st.download_button(
-                    "📥 Download Institutional Invoice (.md)",
-                    data=invoice.get("markdown") or "",
-                    file_name=f"Invoice_{result.get('run_id')}.md",
-                    mime="text/markdown",
-                )
+events = st.session_state.get("events") or (result.get("event_log") if result else []) or []
+with metrics_box.container():
+    if result:
+        m1, m2 = st.columns(2)
+        m1.metric("Confidence", f"{(result.get('final_confidence') or 0):.1%}")
+        m2.metric("Settlements", result.get("settlement_count") or 0)
+with log_box.container():
+    render_live_log(events, limit=None)
 
 with right:
-    tab_live, tab_xrpl, tab_b2c = st.tabs(["Live execution", "XRPL Engine", "B2C marketplace"])
-    with tab_live:
-        if not result:
-            st.caption("Execution trace appears here after a run.")
-        else:
-            st.metric("Confidence", f"{(result.get('final_confidence') or 0):.1%}")
-            st.metric("Settlements", result.get("settlement_count") or 0)
-            for event in result.get("event_log") or []:
-                label = EVENT_LABELS.get(event.get("type"), event.get("type"))
-                st.write(f"`{event.get('at', '')}` {label}")
-    with tab_xrpl:
+    with st.expander("B2C marketplace and XRPL engine"):
         st.caption("Native XRPL primitives backing this settlement layer.")
-        st.success("🟢 Primitive: Payment with Atomic Memo")
+        st.success("Primitive: Payment with Atomic Memo")
         funding_asset = (result or {}).get("funding_asset", "XRP") if result else "XRP"
         if funding_asset == "RLUSD":
-            st.info("🔵 DEX Auto-Bridge: RLUSD → XRP Pathfinding — ACTIVE this run")
+            st.info("DEX Auto-Bridge: RLUSD → XRP Pathfinding — ACTIVE this run")
         else:
-            st.info("🔵 DEX Auto-Bridge: RLUSD → XRP Pathfinding — available (funded in XRP this run)")
-        st.caption("⚡ Consensus speed: ~3.4s (XRPL Testnet close time)")
+            st.info("DEX Auto-Bridge: RLUSD → XRP Pathfinding — available (funded in XRP this run)")
+        st.caption("Consensus speed: ~3.4s (XRPL Testnet close time)")
 
         line_items = ((result or {}).get("invoice") or {}).get("line_items") or [] if result else []
         proven = [item for item in line_items if item.get("memo_proof")]
@@ -418,10 +432,12 @@ with right:
                     )
         else:
             st.caption("The decoded audit memo appears here once a purchase settles.")
-    with tab_b2c:
+
+        st.divider()
+        st.markdown("**B2C marketplace**")
         uploaded = st.file_uploader("Curator CSV / JSON", type=["csv", "json"])
         curator_label = st.text_input("Curator label", value="Independent SGSIN curator")
-        price_drops = st.number_input("Price (drops)", min_value=1, value=400, step=50)
+        price_drops = st.number_input("Price (drops)", min_value=1, value=400, step=50, key="b2c_price")
         if st.button("Register Dataset") and uploaded is not None:
             try:
                 response = requests.post(

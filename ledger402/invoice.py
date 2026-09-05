@@ -80,7 +80,9 @@ def _line_item(
     return {
         "provider_id": provider_id,
         "vendor_name": purchase.get("provider_name") or provider.get("name") or provider_id,
-        "seller_address": provider.get("pay_to") or provider.get("curator_address"),
+        "seller_address": (
+            provider.get("pay_to") or provider.get("curator_address") or os.getenv("XRPL_PAY_TO")
+        ),
         "amount_paid": {
             "drops": price_drops,
             "xrp": _xrp(price_drops),
@@ -113,7 +115,8 @@ def generate_procurement_invoice(state: dict[str, Any]) -> dict[str, Any]:
     total_drops = sum(item["amount_paid"]["drops"] for item in line_items)
     total_rlusd = round(sum(item["amount_paid"]["rlusd_equivalent"] for item in line_items), 4)
     network_fee_drops = NETWORK_FEE_DROPS_PER_TX * len(line_items)
-    protocol_fee_drops = round(total_drops * PROTOCOL_TAKE_RATE, 2)
+    # Disclosed take-rate only: nothing in the settlement path collects this.
+    protocol_fee_drops = int(round(total_drops * PROTOCOL_TAKE_RATE))
 
     audit_anchor = state.get("audit_anchor") or {}
 
@@ -130,7 +133,8 @@ def generate_procurement_invoice(state: dict[str, Any]) -> dict[str, Any]:
             "total_network_fee_drops": network_fee_drops,
             "protocol_take_rate": PROTOCOL_TAKE_RATE,
             "protocol_fee_drops": protocol_fee_drops,
-            "net_settlement_drops": total_drops + network_fee_drops + protocol_fee_drops,
+            "protocol_fee_collected": False,
+            "net_settlement_drops": total_drops + network_fee_drops,
             "initial_confidence": state.get("initial_confidence"),
             "final_confidence": state.get("confidence"),
             "composite_ledger_anchor_hash": audit_anchor.get("audit_hash"),
@@ -184,9 +188,9 @@ def _render_markdown(invoice: dict[str, Any]) -> str:
         f"- **Total RLUSD volume (native DEX cross-currency settlement):** "
         f"${summary['total_rlusd_volume']:.4f}",
         f"- **XRPL network fees:** {summary['total_network_fee_drops']} drops",
-        f"- **Ledger402 protocol take-rate:** {summary['protocol_take_rate']:.1%} "
-        f"({summary['protocol_fee_drops']:.0f} drops)",
-        f"- **Net settlement:** {summary['net_settlement_drops']:.0f} drops",
+        f"- **Ledger402 protocol take-rate (not collected on-ledger):** "
+        f"{summary['protocol_take_rate']:.1%} ({summary['protocol_fee_drops']} drops)",
+        f"- **Net settlement (data cost + network fee):** {summary['net_settlement_drops']} drops",
         f"- **Confidence:** {summary.get('initial_confidence') or 0:.0%} → "
         f"{summary.get('final_confidence') or 0:.1%}",
         f"- **Composite ledger anchor hash:** "

@@ -331,7 +331,6 @@ def procure(state: AgentState) -> dict[str, Any]:
     # on-ledger alongside the settling Payment (see payment.AUDIT_MEMO_TYPE_HEX) so
     # the purchase and the proof of what was requested are one signed transaction.
     evidence_hash = payment.compute_evidence_hash(provider)
-    funding_asset = (os.getenv("LEDGER402_FUNDING_ASSET") or "XRP").strip().upper() or "XRP"
     purchases = list(state.get("purchases") or [])
     purchased_ids = list(state.get("purchased_ids") or [])
     evidence = list(state.get("evidence") or [])
@@ -412,8 +411,9 @@ def procure(state: AgentState) -> dict[str, Any]:
 
     try:
         payment.require_wallet_env()
+        funding_asset = payment.normalize_funding_asset()
         url = providers.resolve_url(provider)
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         record(payment.CONFIG_ERROR, error=str(exc))
         audit.add(log, "PROCUREMENT_FAILED", provider_id=provider.get("id"), reason=str(exc))
         # Configuration will not repair itself between iterations, and attempting every
@@ -877,6 +877,13 @@ def stream_agent(
     yield {"kind": "result", "result": _serialize(last_state)}
 
 
+def _serialized_funding_asset() -> str:
+    try:
+        return payment.normalize_funding_asset()
+    except ValueError:
+        return (os.getenv("LEDGER402_FUNDING_ASSET") or "").strip().upper()
+
+
 def _serialize(state: AgentState) -> dict[str, Any]:
     """Flatten the graph state into the API response."""
     if state.get("error"):
@@ -940,7 +947,7 @@ def _serialize(state: AgentState) -> dict[str, Any]:
         "replay": bool(state.get("replay")),
         "audit_anchor": state.get("audit_anchor"),
         "invoice": state.get("invoice"),
-        "funding_asset": (os.getenv("LEDGER402_FUNDING_ASSET") or "XRP").strip().upper() or "XRP",
+        "funding_asset": _serialized_funding_asset(),
         "event_log": state.get("event_log", []),
         "synthetic": True,
     }

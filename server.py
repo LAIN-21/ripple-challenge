@@ -18,7 +18,7 @@ from xrpl.models.requests import Tx
 
 from ledger402 import REPO_ROOT
 from ledger402 import headers as x402_headers
-from ledger402 import marketplace, odrl, providers
+from ledger402 import marketplace, odrl, payment, providers
 from ledger402.marketplace import DEFAULT_B2C_PRICE_DROPS, MAX_UPLOAD_BYTES
 from providers_data import PROVIDERS_REGISTRY
 
@@ -49,7 +49,7 @@ def _facilitator() -> str:
 
 
 def _funding_asset() -> str:
-    return (os.getenv("LEDGER402_FUNDING_ASSET") or "XRP").strip().upper() or "XRP"
+    return payment.normalize_funding_asset()
 
 
 def _network() -> str:
@@ -126,7 +126,8 @@ def _paid_spec(path: str) -> dict[str, Any] | None:
 def _gate_for(path: str, spec: dict[str, Any]):
     pay_to = str(spec.get("pay_to") or _merchant())
     price = str(int(spec.get("price_drops") or 0))
-    key = f"{path}:{price}:{pay_to}"
+    funding = _funding_asset()
+    key = f"{path}:{price}:{pay_to}:{funding}"
     if key not in _gates:
         if not pay_to:
             raise RuntimeError(
@@ -138,7 +139,7 @@ def _gate_for(path: str, spec: dict[str, Any]):
         # facilitator's verifier only accepts a non-matching SendMax asset when the
         # merchant's own requirement advertises this flag (see x402_xrpl README,
         # "Cross-currency payments (opt-in)").
-        extra = {"crossCurrency": True} if _funding_asset() == "RLUSD" else None
+        extra = {"crossCurrency": True} if funding == "RLUSD" else None
         _gates[key] = require_payment(
             path=path,
             price=price,
@@ -218,7 +219,7 @@ async def payment_gate(request: Request, call_next):
 
     try:
         gate = _gate_for(path, spec)
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
     response = await gate(request, call_next)
     if getattr(response, "status_code", 0) == 402:

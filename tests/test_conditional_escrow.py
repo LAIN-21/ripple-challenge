@@ -38,3 +38,32 @@ def test_fulfillment_reveals_the_exact_preimage_bytes():
     _, fulfillment = build_preimage_condition(preimage)
     # Fulfillment = A0 <len> 80 <preimage-len> <preimage>; the tail is the preimage itself.
     assert bytes.fromhex(fulfillment).endswith(preimage)
+
+
+def test_expected_data_hash_is_metadata_not_on_ledger_condition():
+    from xrpl.wallet import Wallet
+
+    from ledger402.payment import build_conditional_escrow
+
+    wallet = Wallet.create()
+    destination = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+    preimage = b"ledger402-escrow-preimage-32b!!"
+    first = build_conditional_escrow(
+        wallet=wallet,
+        destination=destination,
+        amount_drops=10,
+        expected_data_hash="A" * 64,
+        preimage=preimage,
+    )
+    second = build_conditional_escrow(
+        wallet=wallet,
+        destination=destination,
+        amount_drops=10,
+        expected_data_hash="B" * 64,
+        preimage=preimage,
+    )
+    assert first["condition"] == second["condition"]
+    assert first["fulfillment"] == second["fulfillment"]
+    assert first["evidence_hash"] == "A" * 64
+    assert second["evidence_hash"] == "B" * 64
+    assert first["transaction"]["Condition"] == first["condition"]

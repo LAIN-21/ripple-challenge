@@ -48,6 +48,7 @@ CONFIG_ERROR = "CONFIG_ERROR"
 EXPLORER_TX = "https://testnet.xrpl.org/transactions/{hash}"
 EXPECTED_ASSET = "XRP"
 EXPECTED_SCHEME = "exact"
+SUPPORTED_FUNDING_ASSETS = frozenset({"XRP", "RLUSD"})
 
 # "ledger402:audit" as an XRPL MemoType hex string. Stamped on every atomic-memo
 # payment so the settlement and the proof of what was requested land in the same
@@ -105,6 +106,19 @@ def _missing_wallet_message() -> str:
 def require_wallet_env() -> None:
     if not os.getenv("XRPL_WALLET_SEED") or not os.getenv("XRPL_PAY_TO"):
         raise RuntimeError(_missing_wallet_message())
+
+
+def normalize_funding_asset(raw: str | None = None) -> str:
+    """Blank env defaults to XRP. Any other nonempty value must be XRP or RLUSD."""
+    value = (raw if raw is not None else os.getenv("LEDGER402_FUNDING_ASSET") or "").strip().upper()
+    if not value:
+        return "XRP"
+    if value not in SUPPORTED_FUNDING_ASSETS:
+        raise ValueError(
+            f"Unsupported LEDGER402_FUNDING_ASSET={raw if raw is not None else os.getenv('LEDGER402_FUNDING_ASSET')!r}. "
+            "Use XRP or RLUSD."
+        )
+    return value
 
 
 def _header(response: requests.Response, name: str) -> str | None:
@@ -350,7 +364,8 @@ def _atomic_memo_payment_header_factory(
         drops = str(int(reqs.amount))
 
         send_max: str | IssuedCurrencyAmount | None = None
-        if funding_asset.upper() == "RLUSD":
+        normalized_funding_asset = normalize_funding_asset(funding_asset)
+        if normalized_funding_asset == "RLUSD":
             # Cross-currency settlement: the buyer's desk holds RLUSD; the merchant is
             # paid in drops. SendMax caps spend in the funding asset while Amount stays
             # pinned to the quoted XRP requirement — the native DEX autobridges the
@@ -440,15 +455,14 @@ def build_conditional_escrow(
 ) -> dict[str, Any]:
     """Build an EscrowCreate secured by a PREIMAGE-SHA-256 crypto-condition.
 
-    Conditional delivery: the provider can only finish the escrow (EscrowFinish) by
-    revealing `fulfillment`, which it learns only once it has delivered the verified
-    JSON payload matching `expected_data_hash`. Funds and evidence are bound by the
-    condition rather than by trust in either party.
+    The on-ledger condition is the preimage hash only. `expected_data_hash` is
+    off-ledger metadata for operators; it does not enter `condition` or
+    `fulfillment`. Anyone who holds the fulfillment can finish the escrow.
 
-    Returns the condition/fulfillment pair plus the unsigned transaction; the
-    fulfillment must be held back (e.g. by the provider) until delivery is verified,
-    then supplied to build_escrow_finish. If `rpc_url` is given the transaction is
-    also autofilled and signed.
+    Returns the condition/fulfillment pair plus the unsigned transaction. Hold
+    the fulfillment until delivery is verified off-ledger, then pass it to
+    `build_escrow_finish`. If `rpc_url` is given the transaction is also
+    autofilled and signed.
     """
     secret = preimage or secrets.token_bytes(32)
     condition, fulfillment = build_preimage_condition(secret)
@@ -534,7 +548,7 @@ def purchase_premium(
     timeout: float = 180.0,
     expected_pay_to: str | None = None,
     evidence_hash: str | None = None,
-    funding_asset: str = "XRP",
+    funding_asset: str | None = None,
 ) -> PurchaseRecord:
     """Pay for a premium URL after observing a real 402. Process-local idempotency.
 
@@ -550,6 +564,7 @@ def purchase_premium(
             return existing
 
     require_wallet_env()
+    funding_asset = normalize_funding_asset(funding_asset)
 
     with _lock:
         existing = _cache.get(cache_key)
